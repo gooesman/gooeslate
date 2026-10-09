@@ -1,5 +1,5 @@
 /dist/
-/test-artifacts/
+/test-artifacts*/
 *.exe
 *.test
 *.log
