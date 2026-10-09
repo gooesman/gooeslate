@@ -50,7 +50,7 @@ func (a *appState) renderTranslations(dc uintptr, v engine.Viewport) {
 			continue
 		}
 		// OCR rectangles may exclude antialiased glyph edges. Cover a small margin.
-		pad := int32(math.Max(2, 4*v.Scale))
+		pad := int32(math.Max(2, 6*v.Scale))
 		fill(dc, rect{r.L - pad, r.T - pad, r.R + pad, r.B + pad}, rgb(255, 255, 255))
 		size := int(float64(r.B-r.T) * .82)
 		if size < 6 {

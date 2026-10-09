@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gooesman/gooestranslate/internal/engine"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/jpeg"
 	"image/png"
@@ -384,7 +385,8 @@ func (a *appState) translate() {
 func (a *appState) setImage(img image.Image) {
 	b := img.Bounds()
 	a.img = image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(a.img, a.img.Bounds(), img, b.Min, draw.Src)
+	draw.Draw(a.img, a.img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
+	draw.Draw(a.img, a.img.Bounds(), img, b.Min, draw.Over)
 	a.pixels = imagePixels(a.img)
 	a.blocks = nil
 	a.lines = nil
