@@ -1,0 +1,9 @@
+/dist/
+/test-artifacts/
+*.exe
+*.test
+*.log
+settings.json
+*.local.json
+.env
+.env.*

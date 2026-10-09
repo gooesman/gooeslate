@@ -1,0 +1,25 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - run: go test ./...
+      - run: go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/gooestranslate.exe ./cmd/gooestranslate
+      - run: go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
+      - run: ./dist/gooestranslate-check.exe --smoke-test test-artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gooestranslate-windows-x64
+          path: dist/gooestranslate.exe
