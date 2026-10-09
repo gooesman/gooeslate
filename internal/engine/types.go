@@ -23,16 +23,42 @@ type Translation struct {
 	Text string `json:"text"`
 }
 type Config struct {
-	OCRURL          string `json:"ocr_url"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	APIKey          string `json:"-"`
-	EncryptedKey    string `json:"encrypted_key,omitempty"`
-	Language        string `json:"language"`
-	DisableThinking bool   `json:"disable_thinking"`
+	OCRURL          string           `json:"ocr_url"`
+	BaseURL         string           `json:"base_url"`
+	Model           string           `json:"model"`
+	APIKey          string           `json:"-"`
+	EncryptedKey    string           `json:"encrypted_key,omitempty"`
+	Language        string           `json:"language"`
+	DisableThinking bool             `json:"disable_thinking"`
+	Theme           string           `json:"theme"`
+	DefaultAction   string           `json:"default_action"`
+	CloseToTray     bool             `json:"close_to_tray"`
+	AutoCopyOCR     bool             `json:"auto_copy_ocr"`
+	Hotkeys         Hotkeys          `json:"hotkeys"`
+	Dictionary      DictionaryConfig `json:"dictionary"`
+	TTS             TTSConfig        `json:"tts"`
+}
+type Hotkeys struct {
+	Capture   string `json:"capture"`
+	OCR       string `json:"ocr"`
+	Translate string `json:"translate"`
+	Image     string `json:"image"`
+}
+type DictionaryConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Provider  string `json:"provider"`
+	LocalPath string `json:"local_path"`
+}
+type TTSConfig struct {
+	Provider string `json:"provider"`
+	Voice    string `json:"voice"`
+	Rate     int    `json:"rate"`
+	AutoRead bool   `json:"auto_read"`
 }
 
-func DefaultConfig() Config { return Config{Language: "简体中文", DisableThinking: true} }
+func DefaultConfig() Config {
+	return Config{Language: "简体中文", DisableThinking: true, Theme: "dark", DefaultAction: "choose", CloseToTray: true, Hotkeys: Hotkeys{"Ctrl+Shift+S", "Ctrl+Alt+O", "Ctrl+Alt+T", "Ctrl+Alt+I"}, Dictionary: DictionaryConfig{Enabled: true, Provider: "openai"}, TTS: TTSConfig{Provider: "system"}}
+}
 func (b Block) Bounds() Rect {
 	x, y, r, d := b.Box[0][0], b.Box[0][1], b.Box[0][0], b.Box[0][1]
 	for _, p := range b.Box {

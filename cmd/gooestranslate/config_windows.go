@@ -64,11 +64,14 @@ func loadConfig() (engine.Config, error) {
 	return c, nil
 }
 func saveConfig(c engine.Config) error {
-	encrypted, err := protect([]byte(c.APIKey), false)
-	if err != nil {
-		return err
+	// Preserve an unreadable DPAPI blob until the user replaces or explicitly clears it.
+	if c.APIKey != "" || c.EncryptedKey == "" {
+		encrypted, err := protect([]byte(c.APIKey), false)
+		if err != nil {
+			return err
+		}
+		c.EncryptedKey = base64.StdEncoding.EncodeToString(encrypted)
 	}
-	c.EncryptedKey = base64.StdEncoding.EncodeToString(encrypted)
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err

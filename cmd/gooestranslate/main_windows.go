@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/jchv/go-webview2/pkg/edge"
 	"image"
 	"image/color"
 	"image/draw"
@@ -12,6 +16,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -19,37 +24,70 @@ import (
 	"unsafe"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 const child = 0x40000000 | 0x10000000
-const workMessage = 0x8001
+const taskMessage = 0x8001
+const trayMessage = 0x8002
 
+//go:embed ui/*.html
+var uiFiles embed.FS
+
+type webWindow struct {
+	hwnd    uintptr
+	browser *edge.Chromium
+	kind    string
+	ready   bool
+}
+type resultData struct {
+	Image             string               `json:"image,omitempty"`
+	Width             int                  `json:"width"`
+	Height            int                  `json:"height"`
+	Blocks            []engine.Block       `json:"blocks"`
+	Lines             []resultLine         `json:"lines"`
+	Translations      []engine.Translation `json:"translations"`
+	OriginalText      string               `json:"original_text"`
+	TranslatedText    string               `json:"translated_text"`
+	Mode              string               `json:"mode"`
+	Status            string               `json:"status"`
+	Busy              bool                 `json:"busy"`
+	Error             string               `json:"error"`
+	Language          string               `json:"language"`
+	Theme             string               `json:"theme"`
+	DictionaryEnabled bool                 `json:"dictionary_enabled"`
+}
+type resultLine struct {
+	ID     int         `json:"id"`
+	Text   string      `json:"text"`
+	Bounds engine.Rect `json:"bounds"`
+}
 type appState struct {
-	hwnd, canvas, screen           uintptr
-	controls                       map[int]uintptr
-	labels                         map[int]uintptr
-	regular, heading, small, brush uintptr
-	scale                          float64
-	cfg                            engine.Config
-	img                            *image.RGBA
-	pixels                         []byte
-	blocks                         []engine.Block
-	lines                          []engine.Line
-	translations                   map[int]string
-	selected                       map[int]bool
-	view                           engine.Viewport
-	drag                           bool
-	dragStart, dragEnd             engine.Point
-	capture                        *image.RGBA
-	capturePixels                  []byte
-	captureRect                    rect
-	captureStart, captureEnd       point
-	capturing                      bool
-	busy                           bool
-	cancel                         context.CancelFunc
-	generation                     uint64
-	queue                          chan func()
-	startupError                   string
-	hotkey                         bool
+	cfg                     engine.Config
+	settings, result        *webWindow
+	windows                 map[uintptr]*webWindow
+	capture                 *CaptureController
+	speech                  *SpeechService
+	voices                  []SpeechVoice
+	queue                   chan func()
+	keys                    map[int]engine.Hotkey
+	hotkeyErrors            []string
+	shortcutRecording       bool
+	loadError               string
+	tray                    bool
+	icon                    uintptr
+	img                     *image.RGBA
+	snapshotID              uint64
+	lastImageSent           string
+	data                    resultData
+	lines                   []engine.Line
+	generation              uint64
+	lookupGeneration        uint64
+	cancel                  context.CancelFunc
+	lookupCancel            context.CancelFunc
+	pinned                  bool
+	exiting                 bool
+	testMode                bool
+	uiProbe                 chan bool
+	captureResultWasVisible bool
 }
 
 var app *appState
@@ -57,73 +95,70 @@ var app *appState
 func main() {
 	runtime.LockOSThread()
 	if len(os.Args) > 1 && os.Args[1] == "--configure-stdin" {
-		var c struct {
-			OCRURL          string `json:"ocr_url"`
-			BaseURL         string `json:"base_url"`
-			Model           string `json:"model"`
-			APIKey          string `json:"api_key"`
-			Language        string `json:"language"`
-			DisableThinking bool   `json:"disable_thinking"`
-		}
-		err := json.NewDecoder(io.LimitReader(os.Stdin, 65536)).Decode(&c)
-		if err == nil {
-			err = saveConfig(engine.Config{OCRURL: c.OCRURL, BaseURL: c.BaseURL, Model: c.Model, APIKey: c.APIKey, Language: c.Language, DisableThinking: c.DisableThinking})
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "配置保存失败")
-			os.Exit(1)
-		}
-		fmt.Println("配置已加密保存")
+		configureStdin()
 		return
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "--smoke-test" || os.Args[1] == "--live-test") {
-		if err := smokeTest(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		if e := smokeTest(); e != nil {
+			fmt.Fprintln(os.Stderr, e)
 			os.Exit(1)
 		}
 		return
 	}
+	uiTest := len(os.Args) > 1 && os.Args[1] == "--ui-smoke-test"
 	call(user, "SetProcessDpiAwarenessContext", ^uintptr(3))
-	cfg, err := loadConfig()
-	app = &appState{cfg: cfg, controls: map[int]uintptr{}, labels: map[int]uintptr{}, scale: 1, queue: make(chan func(), 32), selected: map[int]bool{}, translations: map[int]string{}}
-	if err != nil {
-		app.startupError = err.Error()
+	ole32 := syscall.NewLazyDLL("ole32.dll")
+	co := call(ole32, "CoInitializeEx", 0, 2)
+	if int32(co) >= 0 {
+		defer call(ole32, "CoUninitialize")
 	}
-	for _, c := range []struct {
-		name   string
-		proc   uintptr
-		cursor uintptr
-	}{{"GooesTranslateMain", syscall.NewCallback(mainProc), 32512}, {"GooesTranslateCanvas", syscall.NewCallback(canvasProc), 32512}, {"GooesTranslateCapture", syscall.NewCallback(captureProc), 32515}} {
-		if err = register(c.name, c.proc, c.cursor); err != nil {
-			fatal(err)
-			return
-		}
+	cfg, e := loadConfig()
+	if uiTest {
+		cfg = engine.DefaultConfig()
+		e = nil
 	}
-	app.hwnd = create("GooesTranslateMain", "gooestranslate · 截图与原图翻译", 0xcf0000|0x02000000, 0x40000, 100, 80, 1240, 850, 0, 0)
-	if app.hwnd == 0 {
-		fatal(fmt.Errorf("无法创建主窗口"))
+	app = &appState{cfg: cfg, windows: map[uintptr]*webWindow{}, queue: make(chan func(), 128), keys: map[int]engine.Hotkey{}, testMode: uiTest, uiProbe: make(chan bool, 4)}
+	if e != nil {
+		app.loadError = "设置读取失败，请检查文件；如密钥无法解密，请重新填写或清除密钥。"
+	}
+	app.speech = NewSpeechService()
+	defer app.speech.Close()
+	app.voices, _ = app.speech.Voices()
+	app.icon = createAppIcon()
+	if app.icon != 0 {
+		defer call(user, "DestroyIcon", app.icon)
+	}
+	if err := register("GooesTranslateWebV2", syscall.NewCallback(webProcedure), 32512); err != nil {
+		fatal(err)
 		return
 	}
-	app.scale = float64(call(user, "GetDpiForWindow", app.hwnd)) / 96
-	app.fitScale()
-	work := workArea(app.hwnd)
-	width := min(app.d(1240), int(work.R-work.L)-32)
-	height := min(app.d(850), int(work.B-work.T)-32)
-	call(user, "SetWindowPos", app.hwnd, 0, u(int(work.L)+(int(work.R-work.L)-width)/2), u(int(work.T)+(int(work.B-work.T)-height)/2), u(width), u(height), 0x14)
-	app.createUI()
-	app.layout()
-	app.hotkey = call(user, "RegisterHotKey", app.hwnd, 1, 0x4000|2|4, 'S') != 0
-	call(user, "ShowWindow", app.hwnd, 5)
-	call(user, "UpdateWindow", app.hwnd)
-	if app.startupError != "" {
-		app.status(app.startupError)
-	} else if !app.hotkey {
-		app.status("截图快捷键被占用，可点击“截图”按钮。")
+	app.settings, e = app.newWebWindow("settings", "gooestranslate · 设置", 1080, 760)
+	if e != nil {
+		fatal(e)
+		return
+	}
+	app.result, e = app.newWebWindow("result", "gooestranslate · 识别与翻译", 840, 700)
+	if e != nil {
+		fatal(e)
+		return
+	}
+	app.capture = NewCaptureController(app.settings.hwnd, func(img *image.RGBA, mode string) { app.receiveImage(img, mode) }, func() {
+		if app.captureResultWasVisible {
+			app.showResult()
+			app.pushResult()
+		}
+	})
+	if !uiTest {
+		app.hotkeyErrors = app.registerKeys(cfg.Hotkeys)
+		app.tray = app.trayIcon(0)
+	}
+	if uiTest {
+		go app.runUIProbe()
 	} else {
-		app.status("Ctrl+Shift+S 截图 · 打开图片后点击识别 · 可在原图中点击或框选文字")
+		app.showSettings("")
 	}
 	if len(os.Args) > 2 && os.Args[1] == "--open" {
-		app.openImage(os.Args[2])
+		app.openImage(os.Args[2], "ocr")
 	}
 	var m message
 	for {
@@ -131,16 +166,34 @@ func main() {
 		if r <= 0 {
 			break
 		}
-		if call(user, "IsDialogMessageW", app.hwnd, uintptr(unsafe.Pointer(&m))) == 0 {
-			call(user, "TranslateMessage", uintptr(unsafe.Pointer(&m)))
-			call(user, "DispatchMessageW", uintptr(unsafe.Pointer(&m)))
-		}
+		call(user, "TranslateMessage", uintptr(unsafe.Pointer(&m)))
+		call(user, "DispatchMessageW", uintptr(unsafe.Pointer(&m)))
 	}
 }
+func configureStdin() {
+	c := engine.DefaultConfig()
+	var input map[string]json.RawMessage
+	e := json.NewDecoder(io.LimitReader(os.Stdin, 65536)).Decode(&input)
+	if e == nil {
+		raw, _ := json.Marshal(input)
+		e = json.Unmarshal(raw, &c)
+		if k, ok := input["api_key"]; ok {
+			json.Unmarshal(k, &c.APIKey)
+		}
+	}
+	if e == nil {
+		e = saveConfig(c)
+	}
+	if e != nil {
+		fmt.Fprintln(os.Stderr, "配置保存失败")
+		os.Exit(1)
+	}
+	fmt.Println("配置已加密保存")
+}
+func jsonString(v any) string { b, _ := json.Marshal(v); return string(b) }
 func fatal(e error) {
 	call(user, "MessageBoxW", 0, uintptr(unsafe.Pointer(str(e.Error()))), uintptr(unsafe.Pointer(str("gooestranslate"))), 0x10)
 }
-func (a *appState) d(n int) int { return int(float64(n)*a.scale + .5) }
 func workArea(h uintptr) rect {
 	var m struct {
 		Size          uint32
@@ -154,425 +207,338 @@ func workArea(h uintptr) rect {
 	}
 	return rect{0, 0, int32(call(user, "GetSystemMetrics", 0)), int32(call(user, "GetSystemMetrics", 1))}
 }
-func (a *appState) fitScale() {
-	if a.scale <= 0 {
-		a.scale = 1
+func (a *appState) newWebWindow(kind, title string, width, height int) (*webWindow, error) {
+	w := &webWindow{kind: kind}
+	w.hwnd = create("GooesTranslateWebV2", title, 0xcf0000|0x02000000, 0, 120, 90, width, height, 0, 0)
+	if w.hwnd == 0 {
+		return nil, fmt.Errorf("无法打开%s窗口", title)
 	}
-	r := workArea(a.hwnd)
-	a.scale = min(a.scale, float64(r.R-r.L-32)/1100, float64(r.B-r.T-32)/780)
+	a.windows[w.hwnd] = w
+	applyWindowAppearance(w.hwnd, a.cfg.Theme)
+	setWindowAppIcon(w.hwnd, a.icon)
+	area := workArea(w.hwnd)
+	dpi := float64(call(user, "GetDpiForWindow", w.hwnd)) / 96
+	if dpi < 1 {
+		dpi = 1
+	}
+	width = min(int(float64(width)*dpi), int(area.R-area.L)-40)
+	height = min(int(float64(height)*dpi), int(area.B-area.T)-40)
+	call(user, "SetWindowPos", w.hwnd, 0, u(int(area.L)+(int(area.R-area.L)-width)/2), u(int(area.T)+(int(area.B-area.T)-height)/2), u(width), u(height), 0x14)
+	w.browser = edge.NewChromium()
+	w.browser.DataPath = filepath.Join(filepath.Dir(configFile()), "WebView")
+	w.browser.SetGlobalPermission(edge.CoreWebView2PermissionStateDeny)
+	// Leave the WebView COM callback before actions that may open native dialogs.
+	w.browser.MessageCallback = func(raw string) {
+		a.queue <- func() { a.rpc(w, raw) }
+		call(user, "PostMessageW", w.hwnd, taskMessage, 0, 0)
+	}
+	if !w.browser.Embed(w.hwnd) {
+		return nil, fmt.Errorf("界面无法启动，请安装 Microsoft Edge WebView2 Runtime")
+	}
+	w.ready = true
+	if s, e := w.browser.GetSettings(); e == nil {
+		s.PutAreDefaultContextMenusEnabled(false)
+		s.PutAreDevToolsEnabled(false)
+		s.PutIsStatusBarEnabled(false)
+	}
+	w.browser.Init(bridgeScript)
+	html, e := uiFiles.ReadFile("ui/" + kind + ".html")
+	if e != nil {
+		return nil, e
+	}
+	w.browser.NavigateToString(string(html))
+	w.browser.Resize()
+	return w, nil
 }
-func (a *appState) refreshFonts() {
-	old := []uintptr{a.regular, a.small, a.heading}
-	a.regular = font(a.d(15), false)
-	a.small = font(a.d(13), false)
-	a.heading = font(a.d(24), true)
-	for _, h := range a.controls {
-		send(h, 0x30, a.regular, 1)
-	}
-	for _, h := range a.labels {
-		send(h, 0x30, a.small, 1)
-	}
-	for _, h := range old {
-		if h != 0 {
-			call(gdi, "DeleteObject", h)
-		}
-	}
-}
-func (a *appState) control(id int, class, s string, style uintptr) uintptr {
-	h := create(class, s, child|style, 0, 0, 0, 1, 1, a.hwnd, uintptr(id))
-	a.controls[id] = h
-	send(h, 0x30, a.regular, 1)
-	return h
-}
-func (a *appState) createUI() {
-	a.regular = font(a.d(15), false)
-	a.small = font(a.d(13), false)
-	a.heading = font(a.d(24), true)
-	a.brush = call(gdi, "CreateSolidBrush", rgb(250, 250, 252))
-	for _, b := range []struct {
-		id   int
-		text string
-	}{{101, "截图  Ctrl+Shift+S"}, {102, "打开图片"}, {103, "识别文字"}, {104, "原图翻译"}, {105, "导出 PNG"}, {106, "复制文字"}, {107, "取消请求"}, {207, "保存设置"}} {
-		a.control(b.id, "BUTTON", b.text, 0x10000)
-	}
-	for _, f := range []struct {
-		id    int
-		label string
-		value string
-	}{{201, "OCR 表单接口", a.cfg.OCRURL}, {202, "翻译 API 基础地址", a.cfg.BaseURL}, {203, "模型名称", a.cfg.Model}, {204, "API 密钥（本机加密保存）", a.cfg.APIKey}} {
-		style := uintptr(0x10000 | 0x800000 | 0x80)
-		if f.id == 204 {
-			style |= 0x20
-		}
-		h := a.control(f.id, "EDIT", f.value, style)
-		send(h, 0xc5, 8192, 0)
-		l := create("STATIC", f.label, child, 0, 0, 0, 1, 1, a.hwnd, 0)
-		send(l, 0x30, a.small, 1)
-		a.labels[f.id] = l
-	}
-	a.control(205, "COMBOBOX", "", 3|0x10000|0x200000)
-	for _, s := range []string{"简体中文", "繁體中文", "English", "日本語"} {
-		send(a.controls[205], 0x143, 0, uintptr(unsafe.Pointer(str(s))))
-	}
-	idx := 0
-	for i, s := range []string{"简体中文", "繁體中文", "English", "日本語"} {
-		if s == a.cfg.Language {
-			idx = i
-		}
-	}
-	send(a.controls[205], 0x14e, u(idx), 0)
-	a.control(206, "BUTTON", "关闭模型思考", 3|0x10000)
-	setCheck(a.controls[206], a.cfg.DisableThinking)
-	a.control(208, "BUTTON", "显示文字框", 3|0x10000)
-	setCheck(a.controls[208], true)
-	a.control(209, "BUTTON", "显示译文", 3|0x10000)
-	setCheck(a.controls[209], true)
-	a.control(210, "EDIT", "", 0x10000|0x800000|4|0x800|0x40|0x200000)
-	send(a.controls[210], 0xc5, 1000000, 0)
-	a.control(211, "STATIC", "", 0)
-	enabled(a.controls[107], false)
-	a.canvas = create("GooesTranslateCanvas", "", child|0x10000, 0, 0, 0, 1, 1, a.hwnd, 0)
-}
-func (a *appState) layout() {
-	if a.canvas == 0 {
-		return
-	}
-	r := clientRect(a.hwnd)
-	w, h := int(float64(r.R)/a.scale), int(float64(r.B)/a.scale)
-	pos := func(handle uintptr, x, y, width, height int) { move(handle, a.d(x), a.d(y), a.d(width), a.d(height)) }
-	x := 20
-	for _, b := range []struct{ id, w int }{{101, 174}, {102, 94}, {103, 96}, {104, 102}, {105, 94}, {106, 96}, {107, 92}} {
-		pos(a.controls[b.id], x, 76, b.w, 34)
-		x += b.w + 8
-	}
-	side := w - 320
-	canvasW := side - 40
-	if canvasW < 250 {
-		canvasW = 250
-	}
-	pos(a.canvas, 20, 126, canvasW, h-211)
-	pos(a.controls[208], 20, h-72, 132, 28)
-	pos(a.controls[209], 160, h-72, 116, 28)
-	y := 140
-	for _, id := range []int{201, 202, 203, 204} {
-		pos(a.labels[id], side, y, 292, 21)
-		pos(a.controls[id], side, y+25, 292, 29)
-		y += 65
-	}
-	pos(a.controls[205], side, 410, 292, 200)
-	pos(a.controls[206], side, 450, 165, 25)
-	pos(a.controls[207], side+176, 445, 116, 34)
-	pos(a.controls[210], side, 518, 292, h-560)
-	pos(a.controls[211], 20, h-34, w-40, 24)
-	invalidate(a.hwnd)
-	invalidate(a.canvas)
-}
-func (a *appState) config() engine.Config {
-	c := a.cfg
-	c.OCRURL = strings.TrimSpace(text(a.controls[201]))
-	c.BaseURL = strings.TrimSpace(text(a.controls[202]))
-	c.Model = strings.TrimSpace(text(a.controls[203]))
-	c.APIKey = strings.TrimSpace(text(a.controls[204]))
-	c.Language = text(a.controls[205])
-	c.DisableThinking = check(a.controls[206])
-	return c
-}
-func (a *appState) status(s string) { setText(a.controls[211], s) }
-func (a *appState) setBusy(on bool) {
-	a.busy = on
-	for _, id := range []int{101, 102, 103, 104, 105} {
-		enabled(a.controls[id], !on)
-	}
-	enabled(a.controls[107], on)
-}
+
+const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
+
 func (a *appState) post(f func()) {
 	a.queue <- f
-	call(user, "PostMessageW", a.hwnd, workMessage, 0, 0)
+	call(user, "PostMessageW", a.settings.hwnd, taskMessage, 0, 0)
+}
+func (a *appState) showSettings(page string) {
+	if a.settings == nil {
+		return
+	}
+	call(user, "ShowWindow", a.settings.hwnd, 9)
+	call(user, "SetForegroundWindow", a.settings.hwnd)
+	if page != "" {
+		a.settings.browser.Eval("window.openSettingsPane&&window.openSettingsPane(" + jsonString(page) + ")")
+	}
+}
+func (a *appState) showResult() {
+	if a.result == nil {
+		return
+	}
+	call(user, "ShowWindow", a.result.hwnd, 9)
+	call(user, "SetWindowPos", a.result.hwnd, ^uintptr(0), 0, 0, 0, 0, 0x43)
+	call(user, "SetForegroundWindow", a.result.hwnd)
+	if !a.pinned {
+		call(user, "SetTimer", a.result.hwnd, 7010, 1200, 0)
+	}
+}
+func (a *appState) pushResult() {
+	if a.result != nil && a.result.ready {
+		update := a.data
+		if update.Image == a.lastImageSent {
+			update.Image = ""
+		} else {
+			a.lastImageSent = update.Image
+		}
+		a.result.browser.Eval("window.setResult&&window.setResult(" + jsonString(update) + ")")
+	}
+}
+func (a *appState) receiveImage(img *image.RGBA, mode string) {
+	a.stopRequest(false)
+	a.img = img
+	a.snapshotID++
+	snapshot := a.snapshotID
+	cfg := a.cfg
+	a.data = resultData{Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), Mode: mode, Language: cfg.Language, Theme: cfg.Theme, DictionaryEnabled: cfg.Dictionary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Status: "正在识别…"}
+	a.lastImageSent = ""
+	a.lines = nil
+	a.result.browser.Eval("window.setResult&&window.setResult({image:'',original_text:'',translated_text:'',blocks:[],lines:[],translations:[]})")
+	a.showResult()
+	a.pushResult()
+	// Display the result window immediately; large-image encoding stays off the UI thread.
+	go func() {
+		var b bytes.Buffer
+		encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+		if e := encoder.Encode(&b, img); e != nil {
+			return
+		}
+		encoded := "data:image/png;base64," + base64.StdEncoding.EncodeToString(b.Bytes())
+		a.post(func() {
+			if snapshot != a.snapshotID {
+				return
+			}
+			a.data.Image = encoded
+			a.pushResult()
+		})
+	}()
+	a.recognize(mode)
 }
 func (a *appState) newTask() (context.Context, uint64) {
 	a.generation++
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	a.cancel = cancel
-	a.setBusy(true)
+	a.data.Busy = true
+	a.data.Error = ""
 	return ctx, a.generation
 }
-func (a *appState) stop() {
+func (a *appState) recognize(mode string) {
+	if a.img == nil {
+		return
+	}
+	cfg := a.cfg
+	ctx, generation := a.newTask()
+	img := a.img
+	a.data.Status = "正在识别图片中的文字…"
+	a.pushResult()
+	go func() {
+		blocks, e := engine.Recognize(ctx, engine.HTTPClient(), cfg.OCRURL, img)
+		a.post(func() {
+			if generation != a.generation {
+				return
+			}
+			a.cancel()
+			a.cancel = nil
+			a.data.Busy = false
+			if e != nil {
+				a.fail(e)
+				return
+			}
+			a.lines = engine.GroupLines(blocks)
+			a.data.Blocks = blocks
+			a.data.Lines = []resultLine{}
+			for _, l := range a.lines {
+				a.data.Lines = append(a.data.Lines, resultLine{l.ID, l.Text, l.Bounds})
+			}
+			a.data.OriginalText = engine.Text(blocks)
+			a.data.Status = fmt.Sprintf("识别完成 · %d 个文字块", len(blocks))
+			if cfg.AutoCopyOCR && a.data.OriginalText != "" {
+				clipboard(a.result.hwnd, a.data.OriginalText)
+			}
+			a.pushResult()
+			if mode == "translate" || mode == "image" {
+				a.translate(a.data.Language)
+			}
+		})
+	}()
+}
+func (a *appState) translate(language string) {
+	if a.data.Busy {
+		return
+	}
+	if len(a.lines) == 0 {
+		a.fail(fmt.Errorf("没有可翻译的文字，请先截图识别"))
+		return
+	}
+	cfg := a.cfg
+	if language != "" {
+		cfg.Language = language
+	}
+	a.data.Language = cfg.Language
+	a.data.Translations = []engine.Translation{}
+	a.data.TranslatedText = ""
+	ctx, generation := a.newTask()
+	lines := append([]engine.Line(nil), a.lines...)
+	a.data.Status = "正在翻译…"
+	a.pushResult()
+	go func() {
+		values, e := engine.Translate(ctx, engine.HTTPClient(), cfg, lines)
+		a.post(func() {
+			if generation != a.generation {
+				return
+			}
+			a.cancel()
+			a.cancel = nil
+			a.data.Busy = false
+			if e != nil {
+				a.fail(e)
+				return
+			}
+			a.data.Translations = values
+			var texts []string
+			for _, v := range values {
+				texts = append(texts, v.Text)
+			}
+			a.data.TranslatedText = strings.Join(texts, "\n")
+			a.data.Status = "翻译完成"
+			a.pushResult()
+			if cfg.TTS.AutoRead {
+				a.speech.Speak(a.data.TranslatedText, cfg.TTS.Voice, cfg.TTS.Rate)
+			}
+		})
+	}()
+}
+func (a *appState) fail(e error) {
+	a.data.Busy = false
+	a.data.Error = e.Error()
+	a.data.Status = e.Error()
+	a.pushResult()
+}
+func (a *appState) stopRequest(notify bool) {
 	if a.cancel != nil {
 		a.cancel()
 		a.cancel = nil
 	}
+	if a.lookupCancel != nil {
+		a.lookupCancel()
+		a.lookupCancel = nil
+	}
 	a.generation++
-	a.setBusy(false)
-	a.status("已取消请求")
+	a.lookupGeneration++
+	a.data.Busy = false
+	if notify {
+		a.data.Status = "已取消"
+		a.pushResult()
+	}
 }
-func (a *appState) recognize() {
-	if a.busy {
+func (a *appState) lookup(word string, requestID int) {
+	if !a.cfg.Dictionary.Enabled {
+		a.result.browser.Eval("window.setDictionary&&window.setDictionary(" + jsonString(map[string]any{"request_id": requestID, "error": "请先在设置中启用词典"}) + ")")
 		return
 	}
-	if a.img == nil {
-		a.status("请先截图或打开图片")
-		return
+	if a.lookupCancel != nil {
+		a.lookupCancel()
 	}
-	cfg := a.config()
-	if err := engine.ValidateURL(cfg.OCRURL); err != nil {
-		a.status("请填写 OCR 表单接口地址")
-		return
-	}
-	ctx, generation := a.newTask()
-	img := a.img
-	a.status("正在识别：截图将上传到填写的 OCR 地址…")
+	a.lookupGeneration++
+	generation := a.lookupGeneration
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	a.lookupCancel = cancel
+	cfg := a.cfg
 	go func() {
-		blocks, err := engine.Recognize(ctx, engine.HTTPClient(), cfg.OCRURL, img)
+		entry, e := engine.LookupDictionary(ctx, engine.HTTPClient(), cfg, word)
 		a.post(func() {
-			if generation != a.generation {
+			if generation != a.lookupGeneration {
 				return
 			}
-			a.cancel()
-			a.cancel = nil
-			a.setBusy(false)
-			if err != nil {
-				a.status(err.Error())
-				return
+			cancel()
+			a.lookupCancel = nil
+			if e != nil {
+				a.result.browser.Eval("window.setDictionary&&window.setDictionary(" + jsonString(map[string]any{"request_id": requestID, "word": word, "error": e.Error()}) + ")")
+			} else {
+				a.result.browser.Eval("window.setDictionary&&window.setDictionary(" + jsonString(map[string]any{"request_id": requestID, "word": entry.Word, "phonetic": entry.Phonetic, "definitions": entry.Definitions, "source": entry.Source}) + ")")
 			}
-			a.blocks = blocks
-			a.lines = engine.GroupLines(blocks)
-			a.translations = map[int]string{}
-			a.selected = map[int]bool{}
-			setText(a.controls[210], engine.Text(blocks))
-			a.status(fmt.Sprintf("识别完成：%d 个文字框。点击或拖动选择文字，点击“原图翻译”生成译文。", len(blocks)))
-			invalidate(a.canvas)
 		})
 	}()
 }
-func (a *appState) translate() {
-	if a.busy {
-		return
+func (a *appState) startCapture(mode string) bool {
+	if a.capture == nil {
+		return false
 	}
-	if len(a.lines) == 0 {
-		a.status("请先识别文字")
-		return
+	if mode == "" {
+		mode = a.cfg.DefaultAction
 	}
-	cfg := a.config()
-	ctx, generation := a.newTask()
-	lines := append([]engine.Line(nil), a.lines...)
-	a.status("正在翻译识别文字，图片不会发往翻译接口…")
-	go func() {
-		values, err := engine.Translate(ctx, engine.HTTPClient(), cfg, lines)
-		a.post(func() {
-			if generation != a.generation {
-				return
-			}
-			a.cancel()
-			a.cancel = nil
-			a.setBusy(false)
-			if err != nil {
-				a.status(err.Error())
-				return
-			}
-			a.translations = map[int]string{}
-			var texts []string
-			for _, v := range values {
-				a.translations[v.ID] = v.Text
-				texts = append(texts, v.Text)
-			}
-			setText(a.controls[210], strings.Join(texts, "\r\n"))
-			setCheck(a.controls[209], true)
-			a.status("翻译完成。取消“显示译文”对照原图，可导出 PNG。")
-			invalidate(a.canvas)
-		})
-	}()
+	if mode != "choose" && mode != "ocr" && mode != "translate" && mode != "image" {
+		return false
+	}
+	if a.capture.Active() {
+		return false
+	}
+	a.setShortcutRecording(false)
+	a.speech.Stop()
+	a.captureResultWasVisible = a.result != nil && call(user, "IsWindowVisible", a.result.hwnd) != 0
+	if a.result != nil {
+		call(user, "ShowWindow", a.result.hwnd, 0)
+	}
+	if e := a.capture.Start(mode); e != nil {
+		a.fail(e)
+		if a.captureResultWasVisible {
+			a.showResult()
+		}
+		return false
+	}
+	return true
 }
-func (a *appState) setImage(img image.Image) {
-	b := img.Bounds()
-	a.img = image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(a.img, a.img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
-	draw.Draw(a.img, a.img.Bounds(), img, b.Min, draw.Over)
-	a.pixels = imagePixels(a.img)
-	a.blocks = nil
-	a.lines = nil
-	a.translations = map[int]string{}
-	a.selected = map[int]bool{}
-	setText(a.controls[210], "")
-	a.status(fmt.Sprintf("图片已载入：%d × %d。点击“识别文字”。", b.Dx(), b.Dy()))
-	invalidate(a.canvas)
-}
-func (a *appState) openImage(file string) {
+func (a *appState) openImage(file, mode string) error {
 	f, e := os.Open(file)
 	if e != nil {
-		a.status("图片打开失败")
-		return
+		return fmt.Errorf("图片打开失败")
 	}
 	defer f.Close()
 	cfg, _, e := image.DecodeConfig(f)
 	if e != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 40000000 {
-		a.status("请使用不超过 4000 万像素的 PNG 或 JPEG 图片")
-		return
+		return fmt.Errorf("请使用不超过 4000 万像素的 PNG 或 JPEG 图片")
 	}
 	f.Seek(0, 0)
 	img, _, e := image.Decode(f)
 	if e != nil {
-		a.status("图片格式不支持或文件损坏")
-		return
+		return fmt.Errorf("图片损坏或格式不支持")
 	}
-	a.setImage(img)
+	b := img.Bounds()
+	rgba := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(rgba, rgba.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
+	draw.Draw(rgba, rgba.Bounds(), img, b.Min, draw.Over)
+	if mode == "choose" {
+		mode = "ocr"
+	}
+	a.receiveImage(rgba, mode)
+	return nil
 }
-func (a *appState) copyText() {
-	s := text(a.controls[210])
-	if strings.TrimSpace(s) == "" {
-		a.status("没有可复制的文字")
+func (a *appState) quit() {
+	if a.exiting {
 		return
 	}
-	if e := clipboard(a.hwnd, s); e != nil {
-		a.status(e.Error())
-	} else {
-		a.status("文字已复制")
+	a.stopRequest(false)
+	a.exiting = true
+	if a.capture != nil {
+		a.capture.Close()
 	}
-}
-func (a *appState) export() {
-	if a.img == nil {
-		a.status("请先打开图片")
-		return
+	a.speech.Stop()
+	for id := range a.keys {
+		call(user, "UnregisterHotKey", a.settings.hwnd, u(id))
 	}
-	file := fileDialog(a.hwnd, true)
-	if file == "" {
-		return
+	if a.tray {
+		a.trayIcon(2)
 	}
-	img, err := a.composite()
-	if err == nil {
-		var f *os.File
-		f, err = os.Create(file)
-		if err == nil {
-			err = png.Encode(f, img)
-			closeErr := f.Close()
-			if err == nil {
-				err = closeErr
-			}
-		}
+	if a.result != nil {
+		call(user, "DestroyWindow", a.result.hwnd)
 	}
-	if err != nil {
-		a.status("导出图片失败")
-	} else {
-		a.status("PNG 已保存：" + file)
+	if a.settings != nil {
+		call(user, "DestroyWindow", a.settings.hwnd)
 	}
-}
-func mainProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
-	if app == nil {
-		return call(user, "DefWindowProcW", hwnd, uintptr(msg), wp, lp)
-	}
-	switch msg {
-	case 5:
-		if wp == 1 {
-			return 0
-		}
-		app.layout()
-		return 0
-	case 0x24: // MINMAXINFO: five POINTs
-		var p [5]point
-		call(ntdll, "RtlMoveMemory", uintptr(unsafe.Pointer(&p)), lp, unsafe.Sizeof(p))
-		p[3] = point{int32(app.d(1060)), int32(app.d(720))}
-		call(ntdll, "RtlMoveMemory", lp, uintptr(unsafe.Pointer(&p)), unsafe.Sizeof(p))
-		return 0
-	case 0x2e0:
-		app.scale = float64(wp&0xffff) / 96
-		var r rect
-		call(ntdll, "RtlMoveMemory", uintptr(unsafe.Pointer(&r)), lp, unsafe.Sizeof(r))
-		call(user, "SetWindowPos", hwnd, 0, u(int(r.L)), u(int(r.T)), u(int(r.R-r.L)), u(int(r.B-r.T)), 0x14)
-		app.fitScale()
-		if app.canvas != 0 {
-			app.refreshFonts()
-		}
-		app.layout()
-		return 0
-	case workMessage:
-		for {
-			select {
-			case f := <-app.queue:
-				f()
-			default:
-				return 0
-			}
-		}
-	case 0x312:
-		if wp == 1 && !app.busy {
-			app.startCapture()
-		}
-		return 0
-	case 0x113:
-		if wp == 1 {
-			call(user, "KillTimer", hwnd, 1)
-			app.finishCaptureStart()
-		}
-		return 0
-	case 0x111:
-		id := int(wp & 0xffff)
-		switch id {
-		case 101:
-			app.startCapture()
-		case 102:
-			if !app.busy {
-				if f := fileDialog(hwnd, false); f != "" {
-					app.openImage(f)
-				}
-			}
-		case 103:
-			app.recognize()
-		case 104:
-			app.translate()
-		case 105:
-			app.export()
-		case 106:
-			app.copyText()
-		case 107:
-			app.stop()
-		case 207:
-			c := app.config()
-			if err := saveConfig(c); err != nil {
-				app.status(err.Error())
-			} else {
-				app.cfg = c
-				app.status("设置已保存，API 密钥由 Windows 加密")
-			}
-		case 208, 209:
-			invalidate(app.canvas)
-		}
-		return 0
-	case 0x138:
-		call(gdi, "SetBkMode", wp, 1)
-		return app.brush
-	case 0x14:
-		return 1
-	case 0xf:
-		var ps paintstruct
-		dc := call(user, "BeginPaint", hwnd, uintptr(unsafe.Pointer(&ps)))
-		r := clientRect(hwnd)
-		fill(dc, r, rgb(250, 250, 252))
-		drawText(dc, "gooestranslate", rect{int32(app.d(20)), int32(app.d(15)), int32(app.d(430)), int32(app.d(54))}, app.heading, rgb(28, 33, 42), 0x24)
-		drawText(dc, "截图 · 识别 · 原图翻译", rect{int32(app.d(270)), int32(app.d(24)), int32(app.d(620)), int32(app.d(52))}, app.regular, rgb(105, 111, 123), 0x24)
-		side := r.R - int32(app.d(320))
-		drawText(dc, "服务设置", rect{side, int32(app.d(113)), r.R, int32(app.d(138))}, app.regular, rgb(41, 48, 59), 0)
-		drawText(dc, "识别 / 译文 / 已选文字", rect{side, int32(app.d(487)), r.R, int32(app.d(513))}, app.regular, rgb(41, 48, 59), 0)
-		call(user, "EndPaint", hwnd, uintptr(unsafe.Pointer(&ps)))
-		return 0
-	case 0x10:
-		if app.cancel != nil {
-			app.cancel()
-		}
-		if app.screen != 0 {
-			call(user, "DestroyWindow", app.screen)
-		}
-		call(user, "DestroyWindow", hwnd)
-		return 0
-	case 2:
-		if app.hotkey {
-			call(user, "UnregisterHotKey", hwnd, 1)
-		}
-		for _, h := range []uintptr{app.regular, app.small, app.heading, app.brush} {
-			if h != 0 {
-				call(gdi, "DeleteObject", h)
-			}
-		}
-		call(user, "PostQuitMessage", 0)
-		return 0
-	}
-	return call(user, "DefWindowProcW", hwnd, uintptr(msg), wp, lp)
+	call(user, "PostQuitMessage", 0)
 }
