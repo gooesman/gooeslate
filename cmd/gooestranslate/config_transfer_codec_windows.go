@@ -62,6 +62,8 @@ func encodeConfiguration(c engine.Config, includeCredentials bool) ([]byte, erro
 		return nil, errors.New("配置无法编码")
 	}
 	config := value.(map[string]any)
+	// Login startup is a local Windows preference, never part of a portable file.
+	delete(config, "start_at_login")
 	if includeCredentials {
 		putConfigurationCredentials(config, c)
 	} else {

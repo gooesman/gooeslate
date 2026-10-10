@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.6"
+const version = "0.3.7"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -120,6 +120,13 @@ func main() {
 
 func run() int {
 	runtime.LockOSThread()
+	if len(os.Args) == 3 && os.Args[1] == "--write-icon" {
+		if err := writeApplicationIcon(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--configure-stdin" {
 		configureStdin()
 		return 0
@@ -132,16 +139,34 @@ func run() int {
 		return 0
 	}
 	uiTest := len(os.Args) > 1 && (os.Args[1] == "--ui-smoke-test" || os.Args[1] == "--render-smoke-test")
+	if !uiTest {
+		handle, primary, err := acquireApplicationInstance(instanceMutexName(configFile()))
+		if err != nil {
+			fatal(err)
+			return 1
+		}
+		defer call(kernel, "CloseHandle", handle)
+		if !primary {
+			if err := activateApplicationInstance(os.Args); err != nil {
+				fatal(err)
+				return 1
+			}
+			return 0
+		}
+	}
 	call(user, "SetProcessDpiAwarenessContext", ^uintptr(3))
 	ole32 := syscall.NewLazyDLL("ole32.dll")
 	co := call(ole32, "CoInitializeEx", 0, 2)
 	if int32(co) >= 0 {
 		defer call(ole32, "CoUninitialize")
 	}
-	cfg, e := loadConfig()
-	if uiTest {
-		cfg = engine.DefaultConfig()
-		e = nil
+	cfg := engine.DefaultConfig()
+	var e error
+	if !uiTest {
+		cfg, e = loadConfig()
+		if enabled, err := startupStatus(); err == nil {
+			cfg.StartAtLogin = enabled
+		}
 	}
 	app = &appState{cfg: cfg, windows: map[uintptr]*webWindow{}, queue: make(chan func(), 128), keys: map[int]engine.Hotkey{}, testMode: uiTest, uiProbe: make(chan bool, 4)}
 	if !uiTest {
@@ -205,7 +230,7 @@ func run() int {
 	}
 	if uiTest {
 		go app.runUIProbe()
-	} else {
+	} else if showSettingsAtLaunch(os.Args, app.tray) {
 		app.showSettings("")
 	}
 	if len(os.Args) > 2 && os.Args[1] == "--open" {

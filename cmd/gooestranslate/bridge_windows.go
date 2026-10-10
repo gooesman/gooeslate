@@ -68,7 +68,24 @@ func (a *appState) state() any {
 	if a.selection != nil && a.selection.LastError() != nil {
 		warning += " " + a.selection.LastError().Error()
 	}
-	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": strings.TrimSpace(warning), "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "service_test_results": a.publicServiceProbeResults()}
+	startup := a.startupState(startupStatus)
+	public := publicConfig(a.cfg)
+	return map[string]any{"config": public, "has_api_key": a.cfg.APIKey != "", "load_error": strings.TrimSpace(warning), "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "service_test_results": a.publicServiceProbeResults(), "startup_status": startup}
+}
+
+func (a *appState) startupState(read func() (bool, error)) map[string]any {
+	startup := map[string]any{"enabled": a.cfg.StartAtLogin}
+	if !a.testMode {
+		if enabled, err := read(); err != nil {
+			startup["error"] = "无法读取开机自启状态，请检查 Windows 权限后重新打开设置。"
+		} else {
+			// Keep the in-memory save baseline aligned with the state displayed
+			// to the user after an external startup registration change.
+			a.cfg.StartAtLogin = enabled
+			startup["enabled"] = enabled
+		}
+	}
+	return startup
 }
 func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 	arg := func(i int) json.RawMessage {
@@ -263,7 +280,27 @@ func (a *appState) applyConfiguration(cfg engine.Config, keyChanged, fullImport 
 		return apiResult{true, "界面自测未写入个人设置"}, nil
 	}
 	old := a.cfg
-	if err := persistConfigurationChange(old, cfg, a.replaceKeys, saveConfig); err != nil {
+	var startup startupTransaction
+	if fullImport {
+		// A portable import must not change this computer's startup registration.
+		cfg.StartAtLogin = old.StartAtLogin
+		if enabled, err := startupStatus(); err == nil {
+			cfg.StartAtLogin = enabled
+		}
+	} else if cfg.StartAtLogin != old.StartAtLogin {
+		executable, err := os.Executable()
+		if err != nil {
+			return apiResult{}, fmt.Errorf("无法确定程序位置，开机自启未更改")
+		}
+		change, err := prepareStartupChange(executable)
+		if err != nil {
+			return apiResult{}, err
+		}
+		if change.CurrentEnabled() != cfg.StartAtLogin {
+			startup = change
+		}
+	}
+	if err := persistConfigurationWithStartup(old, cfg, startup, a.replaceKeys, saveConfig); err != nil {
 		return apiResult{}, err
 	}
 	a.configurationRevision++
@@ -429,6 +466,41 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	a := app
 	w := a.windows[hwnd]
 	switch msg {
+	case instanceActivationMessage:
+		if !a.testMode && a.settings != nil && a.settings.ready && hwnd == a.settings.hwnd {
+			a.showSettings("")
+			return 1
+		}
+		return 0
+	case instanceCopyDataMessage:
+		if a.testMode || a.exiting || a.settings == nil || !a.settings.ready || a.result == nil || !a.result.ready || hwnd != a.settings.hwnd || lp == 0 {
+			return 0
+		}
+		// WM_COPYDATA owns the source pointers only during this callback. Copy
+		// into Go-owned buffers before queueing work on the application thread.
+		var data instanceCopyData
+		call(ntdll, "RtlMoveMemory", uintptr(unsafe.Pointer(&data)), lp, unsafe.Sizeof(data))
+		if data.Data == 0 || data.Size == 0 || data.Size > instancePayloadLimit || data.ID != instanceOpenImageID {
+			return 0
+		}
+		payload := make([]byte, int(data.Size))
+		call(ntdll, "RtlMoveMemory", uintptr(unsafe.Pointer(&payload[0])), data.Data, uintptr(data.Size))
+		path, err := decodeInstanceOpenImage(data.ID, payload)
+		if err != nil {
+			return 0
+		}
+		select {
+		case a.queue <- func() {
+			if err := a.openImage(path, "ocr"); err != nil {
+				a.fail(err)
+				a.showResult()
+			}
+		}:
+			call(user, "PostMessageW", a.settings.hwnd, taskMessage, 0, 0)
+			return 1
+		default:
+			return 0
+		}
 	case taskMessage:
 		for {
 			select {

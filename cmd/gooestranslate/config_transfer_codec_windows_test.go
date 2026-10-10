@@ -77,6 +77,30 @@ func transferProfile(doc map[string]any, field string) map[string]any {
 	return doc["config"].(map[string]any)[field].([]any)[0].(map[string]any)
 }
 
+func TestConfigurationExportKeepsLoginStartupLocal(t *testing.T) {
+	current := transferTestConfig()
+	current.StartAtLogin = true
+	for _, include := range []bool{false, true} {
+		raw, err := encodeConfiguration(current, include)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte("start_at_login")) {
+			t.Fatal("machine startup preference was included in a portable export")
+		}
+		imported, _, err := decodeConfiguration(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if imported.StartAtLogin {
+			t.Fatal("portable export unexpectedly enables startup on another computer")
+		}
+		if !current.StartAtLogin {
+			t.Fatal("export changed the local startup preference")
+		}
+	}
+}
+
 func TestConfigurationTransferRoundTripWithCredentials(t *testing.T) {
 	original := transferTestConfig()
 	before := cloneConfig(original)

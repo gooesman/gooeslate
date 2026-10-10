@@ -33,6 +33,7 @@ type Config struct {
 	Theme               string               `json:"theme"`
 	DefaultAction       string               `json:"default_action"`
 	CloseToTray         bool                 `json:"close_to_tray"`
+	StartAtLogin        bool                 `json:"start_at_login"`
 	AutoCopyOCR         bool                 `json:"auto_copy_ocr"`
 	Hotkeys             Hotkeys              `json:"hotkeys"`
 	Selection           SelectionConfig      `json:"selection"`
