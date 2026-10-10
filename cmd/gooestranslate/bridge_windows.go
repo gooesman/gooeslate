@@ -64,7 +64,11 @@ func (a *appState) resolveRPC(w *webWindow, id int, result any, e error) {
 	w.browser.Eval(fmt.Sprintf("window.__resolve(%d,%t,%s)", id, ok, jsonString(result)))
 }
 func (a *appState) state() any {
-	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": a.loadError, "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "service_test_results": a.publicServiceProbeResults()}
+	warning := a.loadError
+	if a.selection != nil && a.selection.LastError() != nil {
+		warning += " " + a.selection.LastError().Error()
+	}
+	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": strings.TrimSpace(warning), "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "service_test_results": a.publicServiceProbeResults()}
 }
 func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 	arg := func(i int) json.RawMessage {
@@ -163,7 +167,7 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 		}
 		switch action {
 		case "translate":
-			if p.Mode == "image" || p.Mode == "translate" {
+			if a.data.Mode != "selection" && (p.Mode == "image" || p.Mode == "translate") {
 				a.data.Mode = p.Mode
 			}
 			a.translate(p.Language)
@@ -230,18 +234,22 @@ func (a *appState) saveSettings(raw json.RawMessage) (apiResult, error) {
 		return apiResult{true, "界面自测未写入个人设置"}, nil
 	}
 	old := a.cfg
-	errs := a.replaceKeys(cfg.Hotkeys)
+	errs := a.replaceKeys(effectiveHotkeys(cfg))
 	if len(errs) > 0 {
-		a.replaceKeys(old.Hotkeys)
+		a.replaceKeys(effectiveHotkeys(old))
 		return apiResult{}, fmt.Errorf("快捷键保存失败：%s", strings.Join(errs, "；"))
 	}
 	if e := saveConfig(cfg); e != nil {
-		a.replaceKeys(old.Hotkeys)
+		a.replaceKeys(effectiveHotkeys(old))
 		return apiResult{}, fmt.Errorf("设置写入失败：%w", e)
 	}
 	a.stopSpeech()
 	a.cancelWordRequests()
+	if old.Selection != cfg.Selection || old.Hotkeys.Selection != cfg.Hotkeys.Selection {
+		a.stopRequest(false)
+	}
 	a.cfg = cfg
+	a.configureSelection()
 	if keyChanged && !unreadableCredential(&cfg) {
 		a.loadError = ""
 	}
@@ -417,6 +425,8 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		if wp >= 10 && wp <= 13 {
 			modes := []string{"", "ocr", "translate", "image"}
 			a.startCapture(modes[int(wp)-10])
+		} else if wp == 14 {
+			a.startSelectionTranslation()
 		}
 		return 0
 	case 0x113:

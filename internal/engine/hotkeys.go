@@ -70,7 +70,7 @@ func ParseHotkey(value string) (Hotkey, error) {
 }
 func ValidateHotkeys(h Hotkeys) error {
 	seen := map[string]string{}
-	for _, v := range []struct{ name, key string }{{"截图工具", h.Capture}, {"截图识别", h.OCR}, {"截图翻译", h.Translate}, {"原图翻译", h.Image}} {
+	for _, v := range []struct{ name, key string }{{"截图工具", h.Capture}, {"截图识别", h.OCR}, {"截图翻译", h.Translate}, {"原图翻译", h.Image}, {"划词翻译", h.Selection}} {
 		p, e := ParseHotkey(v.key)
 		if e != nil {
 			return fmt.Errorf("%s：%w", v.name, e)

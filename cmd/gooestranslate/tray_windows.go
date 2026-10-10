@@ -12,6 +12,7 @@ func (a *appState) setShortcutRecording(enabled bool) {
 		return
 	}
 	a.shortcutRecording = enabled
+	a.configureSelection()
 	if a.testMode {
 		return
 	}
@@ -21,7 +22,7 @@ func (a *appState) setShortcutRecording(enabled bool) {
 		}
 		a.keys = map[int]engine.Hotkey{}
 	} else {
-		a.hotkeyErrors = a.replaceKeys(a.cfg.Hotkeys)
+		a.hotkeyErrors = a.replaceKeys(effectiveHotkeys(a.cfg))
 	}
 }
 
@@ -56,7 +57,7 @@ func (a *appState) trayMenu() {
 	for _, v := range []struct {
 		id    int
 		label string
-	}{{1, "截图工具"}, {2, "截图识别"}, {3, "截图翻译"}, {4, "原图翻译"}, {5, "打开设置"}, {6, "退出"}} {
+	}{{1, "截图工具"}, {2, "截图识别"}, {3, "截图翻译"}, {4, "原图翻译"}, {7, "划词翻译设置"}, {5, "打开设置"}, {6, "退出"}} {
 		call(user, "AppendMenuW", menu, 0, u(v.id), uintptr(unsafe.Pointer(str(v.label))))
 	}
 	var p point
@@ -71,6 +72,8 @@ func (a *appState) trayMenu() {
 		a.showSettings("")
 	case 6:
 		a.quit()
+	case 7:
+		a.showSettings("selection")
 	}
 	call(user, "PostMessageW", a.settings.hwnd, 0, 0, 0)
 }
@@ -81,7 +84,7 @@ func keyEntries(keys engine.Hotkeys) []struct {
 	return []struct {
 		id          int
 		name, value string
-	}{{10, "截图工具", keys.Capture}, {11, "截图识别", keys.OCR}, {12, "截图翻译", keys.Translate}, {13, "原图翻译", keys.Image}}
+	}{{10, "截图工具", keys.Capture}, {11, "截图识别", keys.OCR}, {12, "截图翻译", keys.Translate}, {13, "原图翻译", keys.Image}, {14, "划词翻译", keys.Selection}}
 }
 func (a *appState) registerKeys(keys engine.Hotkeys) []string {
 	var errs []string

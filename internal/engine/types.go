@@ -35,6 +35,7 @@ type Config struct {
 	CloseToTray         bool                 `json:"close_to_tray"`
 	AutoCopyOCR         bool                 `json:"auto_copy_ocr"`
 	Hotkeys             Hotkeys              `json:"hotkeys"`
+	Selection           SelectionConfig      `json:"selection"`
 	Dictionary          DictionaryConfig     `json:"dictionary"`
 	TTS                 TTSConfig            `json:"tts"`
 	TranslationServices []TranslationService `json:"translation_services"`
@@ -116,6 +117,11 @@ type Hotkeys struct {
 	OCR       string `json:"ocr"`
 	Translate string `json:"translate"`
 	Image     string `json:"image"`
+	Selection string `json:"selection"`
+}
+type SelectionConfig struct {
+	Enabled    bool `json:"enabled"`
+	ShowButton bool `json:"show_button"`
 }
 type DictionaryConfig struct {
 	Enabled   bool   `json:"enabled"`
@@ -130,7 +136,7 @@ type TTSConfig struct {
 }
 
 func DefaultConfig() Config {
-	return NormalizeConfig(Config{Language: "auto", DisableThinking: true, AutoCopyImage: true, Theme: "dark", DefaultAction: "choose", CloseToTray: true, Hotkeys: Hotkeys{"Ctrl+Shift+S", "Ctrl+Alt+O", "Ctrl+Alt+T", "Ctrl+Alt+I"}, Dictionary: DictionaryConfig{Enabled: true, Provider: "openai"}, TTS: TTSConfig{Provider: "system"}})
+	return NormalizeConfig(Config{Language: "auto", DisableThinking: true, AutoCopyImage: true, Theme: "dark", DefaultAction: "choose", CloseToTray: true, Selection: SelectionConfig{Enabled: true, ShowButton: false}, Hotkeys: Hotkeys{Capture: "Ctrl+Shift+S", OCR: "Ctrl+Alt+O", Translate: "Ctrl+Alt+T", Image: "Ctrl+Alt+I", Selection: "Ctrl+Alt+D"}, Dictionary: DictionaryConfig{Enabled: true, Provider: "openai"}, TTS: TTSConfig{Provider: "system"}})
 }
 func (b Block) Bounds() Rect {
 	x, y, r, d := b.Box[0][0], b.Box[0][1], b.Box[0][0], b.Box[0][1]

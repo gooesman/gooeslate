@@ -170,6 +170,25 @@ func (a *appState) runUIProbe() {
 		}
 	}
 	bridgeOK := ok
+	selectionOK := false
+	if bridgeOK {
+		a.post(func() {
+			data, lines, err := selectedTextResult(a.cfg, "Select a word to translate.")
+			if err != nil {
+				a.uiProbe <- false
+				return
+			}
+			a.data, a.lines = data, lines
+			a.data.TranslatedText = "选择一个单词进行翻译。"
+			a.pushResult()
+			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='selection'&&!r.image&&r.lines.length===1&&document.getElementById('title').textContent==='划词翻译'&&document.getElementById('app').dataset.view==='text'&&document.getElementById('tabImage').style.display==='none'&&document.getElementById('export').style.display==='none'))")
+		})
+		select {
+		case selectionOK = <-a.uiProbe:
+		case <-time.After(8 * time.Second):
+		}
+		ok = selectionOK
+	}
 	if bridgeOK {
 		a.post(func() {
 			img, err := syntheticImage()
@@ -199,7 +218,8 @@ func (a *appState) runUIProbe() {
 			ok = false
 		}
 	}
-	report := map[string]any{"settings_and_result_bridge": bridgeOK, "native_webview_html_loaded": bridgeOK, "secret_fields_not_exposed": bridgeOK, "image_mode_push": ok, "desktop_capture_performed": false, "personal_settings_written": false}
+	ok = ok && selectionOK
+	report := map[string]any{"settings_and_result_bridge": bridgeOK, "native_webview_html_loaded": bridgeOK, "secret_fields_not_exposed": bridgeOK, "image_mode_push": ok, "selection_mode_push": selectionOK, "global_selection_hook_installed": false, "clipboard_read_or_written": false, "desktop_capture_performed": false, "personal_settings_written": false}
 	if ok && os.Args[1] == "--render-smoke-test" {
 		if err := a.runRenderProbe(directory); err != nil {
 			fmt.Fprintln(os.Stderr, err)

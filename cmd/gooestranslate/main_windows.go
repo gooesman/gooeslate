@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.4"
+const version = "0.3.5"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -72,6 +72,7 @@ type appState struct {
 	settings, result        *webWindow
 	windows                 map[uintptr]*webWindow
 	capture                 *CaptureController
+	selection               *SelectionController
 	speech                  *SpeechService
 	remoteSpeech            *RemoteSpeechService
 	speechCancel            context.CancelFunc
@@ -185,7 +186,18 @@ func run() int {
 		}
 	})
 	if !uiTest {
-		app.hotkeyErrors = app.registerKeys(cfg.Hotkeys)
+		app.selection, e = NewSelectionController(app.settings.hwnd, app.post, func(text string, target uintptr) {
+			if !app.cfg.Selection.Enabled || app.shortcutRecording || app.exiting || app.capture.Active() || call(user, "GetForegroundWindow") != target {
+				return
+			}
+			app.receiveSelectedText(text)
+		})
+		if e != nil {
+			app.loadError += " 划词按钮初始化失败，可使用划词快捷键：" + e.Error()
+		} else {
+			app.configureSelection()
+		}
+		app.hotkeyErrors = app.registerKeys(effectiveHotkeys(cfg))
 		app.tray = app.trayIcon(0)
 	}
 	if uiTest {
@@ -302,6 +314,7 @@ func (a *appState) post(f func()) {
 	call(user, "PostMessageW", a.settings.hwnd, taskMessage, 0, 0)
 }
 func (a *appState) showSettings(page string) {
+	a.hideSelectionButton()
 	if a.settings == nil {
 		return
 	}
@@ -314,6 +327,7 @@ func (a *appState) showSettings(page string) {
 	}
 }
 func (a *appState) showResult() {
+	a.hideSelectionButton()
 	if a.result == nil {
 		return
 	}
@@ -537,6 +551,8 @@ func (a *appState) startCapture(mode string) bool {
 	if a.capture.Active() {
 		return false
 	}
+	a.hideSelectionButton()
+	a.stopRequest(false)
 	a.setShortcutRecording(false)
 	a.stopSpeech()
 	a.captureResultWasVisible = a.result != nil && call(user, "IsWindowVisible", a.result.hwnd) != 0
@@ -584,6 +600,9 @@ func (a *appState) quit() {
 	a.stopRequest(false)
 	a.cancelServiceProbes()
 	a.exiting = true
+	if a.selection != nil {
+		a.selection.Close()
+	}
 	if a.capture != nil {
 		a.capture.Close()
 	}
