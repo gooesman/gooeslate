@@ -46,6 +46,10 @@ func (a *appState) rpc(w *webWindow, raw string) {
 		a.testService(w, req)
 		return
 	}
+	if req.Method == "listModels" {
+		a.listModels(w, req)
+		return
+	}
 	result, e := a.handleRPC(w, req)
 	a.resolveRPC(w, req.ID, result, e)
 }

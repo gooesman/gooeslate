@@ -154,7 +154,7 @@ func (a *appState) runUIProbe() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	a.post(func() {
-		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&typeof window.testService==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
+		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&typeof window.testService==='function'&&typeof window.listModels==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
 		a.result.browser.Eval("getResult().then(r=>uiProbe(!!window.__uiReady&&typeof window.setResult==='function'&&typeof window.setDictionary==='function'))")
 	})
 	ok := true
@@ -402,5 +402,17 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 		return fmt.Errorf("服务测试桥接超时")
 	}
 	report["service_test_bridge_without_network"] = true
+	a.post(func() {
+		a.settings.browser.Eval("window.openServiceEditor('translation','translation-1');window.listModels({kind:'translation',service:{id:'translation-1',provider:'openai',model:''}}).then(r=>uiProbe(r.ok===false&&r.message.includes('界面自测')&&!!document.getElementById('translationModelsFetch')))")
+	})
+	select {
+	case passed := <-a.uiProbe:
+		if !passed {
+			return fmt.Errorf("模型列表桥接或获取按钮验证失败")
+		}
+	case <-time.After(8 * time.Second):
+		return fmt.Errorf("模型列表桥接验证超时")
+	}
+	report["model_catalog_bridge_without_network"] = true
 	return nil
 }
