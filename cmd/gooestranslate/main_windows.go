@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.1"
+const version = "0.3.2"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -78,6 +78,8 @@ type appState struct {
 	speechGeneration        uint64
 	vocabularyCancel        context.CancelFunc
 	vocabularyGeneration    uint64
+	serviceProbes           map[string]serviceProbeTask
+	serviceProbeResults     map[string]serviceProbeRecord
 	captureClipboardError   string
 	voices                  []SpeechVoice
 	queue                   chan func()
@@ -138,6 +140,9 @@ func run() int {
 		e = nil
 	}
 	app = &appState{cfg: cfg, windows: map[uintptr]*webWindow{}, queue: make(chan func(), 128), keys: map[int]engine.Hotkey{}, testMode: uiTest, uiProbe: make(chan bool, 4)}
+	if !uiTest {
+		app.serviceProbeResults = loadServiceProbeResults()
+	}
 	if e != nil {
 		app.loadError = "设置读取失败，请检查文件；如密钥无法解密，请重新填写或清除密钥。"
 	}
@@ -290,7 +295,7 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	return w, nil
 }
 
-const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openEudicAuthorization']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
+const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openEudicAuthorization','testService']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
 
 func (a *appState) post(f func()) {
 	a.queue <- f
@@ -577,6 +582,7 @@ func (a *appState) quit() {
 		return
 	}
 	a.stopRequest(false)
+	a.cancelServiceProbes()
 	a.exiting = true
 	if a.capture != nil {
 		a.capture.Close()

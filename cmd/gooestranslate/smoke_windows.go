@@ -154,7 +154,7 @@ func (a *appState) runUIProbe() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	a.post(func() {
-		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
+		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&typeof window.testService==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
 		a.result.browser.Eval("getResult().then(r=>uiProbe(!!window.__uiReady&&typeof window.setResult==='function'&&typeof window.setDictionary==='function'))")
 	})
 	ok := true
@@ -333,7 +333,7 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 		}
 		if pane == "vocabulary" {
 			a.post(func() {
-				a.settings.browser.Eval("window.openEudicAuthorization().then(r=>uiProbe(r.ok&&document.getElementById('vocabularyCategoryID').type==='text'&&document.getElementById('vocabularyCategoryID').value==='0'&&document.getElementById('vocabularyUrl').value===" + jsonString(engine.DefaultVocabularyBaseURL) + "))")
+				a.settings.browser.Eval("window.openEudicAuthorization().then(r=>uiProbe(r.ok&&document.getElementById('vocabularyProfiles').querySelectorAll('.service-item').length===1&&document.getElementById('vocabularyCategoryID').type==='text'&&document.getElementById('vocabularyCategoryID').value==='0'&&document.getElementById('vocabularyUrl').value===" + jsonString(engine.DefaultVocabularyBaseURL) + "))")
 			})
 			select {
 			case passed := <-a.uiProbe:
@@ -359,6 +359,48 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 			return fmt.Errorf("%s 服务页渲染超时", pane)
 		}
 		report[pane+"_service_page_pixels"] = true
+		a.post(func() {
+			if pane == "vocabulary" {
+				a.settings.browser.Eval("window.openSingletonServiceEditor('vocabulary');uiProbe(!document.getElementById('vocabularyEditor').hidden&&document.getElementById('vocabularyProfiles').hidden)")
+			} else {
+				id := pane + "-1"
+				a.settings.browser.Eval("window.openServiceEditor(" + jsonString(pane) + "," + jsonString(id) + ");uiProbe(!document.getElementById(" + jsonString(pane+"Editor") + ").hidden&&document.getElementById(" + jsonString(pane+"Profiles") + ").hidden)")
+			}
+		})
+		select {
+		case passed := <-a.uiProbe:
+			if !passed {
+				return fmt.Errorf("%s 服务编辑器未打开", pane)
+			}
+		case <-time.After(8 * time.Second):
+			return fmt.Errorf("%s 服务编辑器超时", pane)
+		}
+		time.Sleep(250 * time.Millisecond)
+		completed = make(chan error, 1)
+		a.post(func() {
+			captureWebView(a.settings, filepath.Join(directory, "settings-"+pane+"-editor.png"), func(err error) { completed <- err })
+		})
+		select {
+		case err := <-completed:
+			if err != nil {
+				return err
+			}
+		case <-time.After(12 * time.Second):
+			return fmt.Errorf("%s 编辑器渲染超时", pane)
+		}
+		report[pane+"_service_editor_pixels"] = true
 	}
+	a.post(func() {
+		a.settings.browser.Eval("window.testService({kind:'tts',service:{id:'tts-1',provider:'system'}}).then(r=>uiProbe(r.ok===false&&r.message.includes('界面自测')))")
+	})
+	select {
+	case passed := <-a.uiProbe:
+		if !passed {
+			return fmt.Errorf("服务测试桥接验证失败")
+		}
+	case <-time.After(8 * time.Second):
+		return fmt.Errorf("服务测试桥接超时")
+	}
+	report["service_test_bridge_without_network"] = true
 	return nil
 }

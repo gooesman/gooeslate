@@ -42,6 +42,10 @@ func (a *appState) rpc(w *webWindow, raw string) {
 		a.vocabularyLists(w, req)
 		return
 	}
+	if req.Method == "testService" {
+		a.testService(w, req)
+		return
+	}
 	result, e := a.handleRPC(w, req)
 	a.resolveRPC(w, req.ID, result, e)
 }
@@ -56,7 +60,7 @@ func (a *appState) resolveRPC(w *webWindow, id int, result any, e error) {
 	w.browser.Eval(fmt.Sprintf("window.__resolve(%d,%t,%s)", id, ok, jsonString(result)))
 }
 func (a *appState) state() any {
-	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": a.loadError, "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors}
+	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": a.loadError, "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "service_test_results": a.publicServiceProbeResults()}
 }
 func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 	arg := func(i int) json.RawMessage {
