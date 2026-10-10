@@ -38,7 +38,14 @@ func (a *appState) rpc(w *webWindow, raw string) {
 	if json.Unmarshal([]byte(raw), &req) != nil || req.ID <= 0 {
 		return
 	}
+	if req.Method == "vocabularyLists" {
+		a.vocabularyLists(w, req)
+		return
+	}
 	result, e := a.handleRPC(w, req)
+	a.resolveRPC(w, req.ID, result, e)
+}
+func (a *appState) resolveRPC(w *webWindow, id int, result any, e error) {
 	if a.exiting || !w.ready {
 		return
 	}
@@ -46,13 +53,10 @@ func (a *appState) rpc(w *webWindow, raw string) {
 	if e != nil {
 		result = e.Error()
 	}
-	w.browser.Eval(fmt.Sprintf("window.__resolve(%d,%t,%s)", req.ID, ok, jsonString(result)))
+	w.browser.Eval(fmt.Sprintf("window.__resolve(%d,%t,%s)", id, ok, jsonString(result)))
 }
 func (a *appState) state() any {
-	cfg := a.cfg
-	cfg.APIKey = ""
-	cfg.EncryptedKey = ""
-	return map[string]any{"config": cfg, "has_api_key": a.cfg.APIKey != "", "load_error": a.loadError, "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors, "integrations": []map[string]string{{"name": "系统语音", "status": fmt.Sprintf("%d 个可用声音", len(a.voices))}, {"name": "离线词典", "status": "JSON / ECDICT CSV"}}}
+	return map[string]any{"config": publicConfig(a.cfg), "has_api_key": a.cfg.APIKey != "", "load_error": a.loadError, "version": version, "voices": a.voices, "hotkey_errors": a.hotkeyErrors}
 }
 func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 	arg := func(i int) json.RawMessage {
@@ -129,6 +133,7 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 			RequestID       int    `json:"request_id"`
 			Mode            string `json:"mode"`
 			Language        string `json:"language"`
+			Pane            string `json:"pane"`
 			Enabled         bool   `json:"enabled"`
 			ShowTranslation bool   `json:"show_translation"`
 		}
@@ -159,15 +164,20 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 				return nil, fmt.Errorf("请先选中文字")
 			}
 			a.lookup(p.Text, p.RequestID)
+		case "add_vocabulary":
+			if a.testMode {
+				return nil, fmt.Errorf("界面自测不会写入生词本")
+			}
+			a.addVocabulary(p.Text, p.RequestID)
 		case "speak":
 			if strings.TrimSpace(p.Text) == "" {
 				return nil, fmt.Errorf("没有可朗读的文字")
 			}
-			if e := a.speech.Speak(p.Text, a.cfg.TTS.Voice, a.cfg.TTS.Rate); e != nil {
+			if e := a.speak(p.Text); e != nil {
 				return nil, e
 			}
 		case "stop_speech":
-			a.speech.Stop()
+			a.stopSpeech()
 		case "pin":
 			a.pinned = p.Enabled
 			position := ^uintptr(1)
@@ -177,11 +187,11 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 			call(user, "KillTimer", w.hwnd, 7010)
 			call(user, "SetWindowPos", w.hwnd, position, 0, 0, 0, 0, 0x13)
 		case "settings":
-			a.showSettings("")
+			a.showSettings(p.Pane)
 		case "close":
 			call(user, "ShowWindow", w.hwnd, 0)
 			a.stopRequest(false)
-			a.speech.Stop()
+			a.stopSpeech()
 		default:
 			return nil, fmt.Errorf("不支持的结果操作")
 		}
@@ -210,8 +220,10 @@ func (a *appState) saveSettings(raw json.RawMessage) (apiResult, error) {
 		a.replaceKeys(old.Hotkeys)
 		return apiResult{}, fmt.Errorf("设置写入失败：%w", e)
 	}
+	a.stopSpeech()
+	a.cancelWordRequests()
 	a.cfg = cfg
-	if keyChanged {
+	if keyChanged && !unreadableCredential(&cfg) {
 		a.loadError = ""
 	}
 	a.hotkeyErrors = nil
@@ -220,22 +232,25 @@ func (a *appState) saveSettings(raw json.RawMessage) (apiResult, error) {
 	}
 	a.data.Theme = cfg.Theme
 	a.data.DictionaryEnabled = cfg.Dictionary.Enabled
-	if !cfg.Dictionary.Enabled && a.lookupCancel != nil {
-		a.lookupCancel()
-		a.lookupCancel = nil
-		a.lookupGeneration++
+	a.data.VocabularyEnabled = cfg.Vocabulary.Enabled
+	if a.result != nil && a.result.ready {
+		a.result.browser.Eval("window.setDictionary&&window.setDictionary({reset:true});window.setVocabularyStatus&&window.setVocabularyStatus({reset:true})")
 	}
 	a.pushResult()
 	return apiResult{true, "设置已保存，快捷键已生效"}, nil
 }
 
 func mergeSettings(current engine.Config, raw json.RawMessage) (engine.Config, bool, error) {
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil {
+		raw = json.RawMessage(encoded)
+	}
 	var req struct {
 		engine.Config
 		APIKey      string `json:"api_key"`
 		ClearAPIKey bool   `json:"clear_api_key"`
 	}
-	req.Config = current
+	req.Config = cloneConfig(current)
 	if e := decodeArgument(raw, &req); e != nil {
 		return current, false, fmt.Errorf("设置格式无效")
 	}
@@ -253,6 +268,39 @@ func mergeSettings(current engine.Config, raw json.RawMessage) (engine.Config, b
 		cfg.EncryptedKey = ""
 		keyChanged = true
 	}
+	profileChanged, e := mergeProfileCredentials(current, &cfg, raw)
+	if e != nil {
+		return current, false, fmt.Errorf("服务凭据格式无效")
+	}
+	keyChanged = keyChanged || profileChanged
+	var fields map[string]json.RawMessage
+	json.Unmarshal(raw, &fields)
+	_, translationsProvided := fields["translation_services"]
+	_, ocrProvided := fields["ocr_services"]
+	_, ttsProvided := fields["tts_services"]
+	// Explicit profile edits replace legacy settings; migration must never
+	// resurrect a removed service or a credential the user explicitly cleared.
+	if translationsProvided {
+		cfg.BaseURL, cfg.Model, cfg.APIKey, cfg.EncryptedKey = "", "", "", ""
+	}
+	if ocrProvided {
+		cfg.OCRURL = ""
+	}
+	if ttsProvided {
+		cfg.TTS = engine.TTSConfig{}
+	}
+	cfg = engine.NormalizeConfig(cfg)
+	if translationsProvided {
+		p := engine.ActiveTranslation(cfg)
+		cfg.BaseURL, cfg.Model, cfg.APIKey, cfg.EncryptedKey, cfg.DisableThinking = p.BaseURL, p.Model, p.APIKey, p.EncryptedKey, p.DisableThinking
+	}
+	if ocrProvided {
+		cfg.OCRURL = engine.ActiveOCR(cfg).URL
+	}
+	if ttsProvided {
+		p := engine.ActiveTTS(cfg)
+		cfg.TTS = engine.TTSConfig{Provider: p.Provider, Voice: p.Voice, Rate: p.Rate, AutoRead: p.AutoRead}
+	}
 	return cfg, keyChanged, nil
 }
 func validateSettings(c engine.Config) error {
@@ -269,8 +317,8 @@ func validateSettings(c engine.Config) error {
 	if e := engine.ValidateHotkeys(c.Hotkeys); e != nil {
 		return e
 	}
-	if c.TTS.Rate < -5 || c.TTS.Rate > 5 {
-		return fmt.Errorf("语速范围为 -5 到 5")
+	if c.TTS.Rate < -10 || c.TTS.Rate > 10 {
+		return fmt.Errorf("系统语速范围为 -10 到 10")
 	}
 	if c.Theme != "dark" && c.Theme != "light" && c.Theme != "system" {
 		return fmt.Errorf("主题设置无效")
@@ -278,13 +326,13 @@ func validateSettings(c engine.Config) error {
 	if c.DefaultAction != "choose" && c.DefaultAction != "ocr" && c.DefaultAction != "translate" && c.DefaultAction != "image" {
 		return fmt.Errorf("默认截图操作无效")
 	}
-	if c.Dictionary.Provider != "openai" && c.Dictionary.Provider != "local" {
+	if c.Dictionary.Provider != "openai" && c.Dictionary.Provider != "local" && c.Dictionary.Provider != "eudic" {
 		return fmt.Errorf("词典服务无效")
 	}
 	if c.Dictionary.Enabled && c.Dictionary.Provider == "local" && strings.TrimSpace(c.Dictionary.LocalPath) == "" {
 		return fmt.Errorf("请选择本地词典文件")
 	}
-	return nil
+	return engine.ValidateServiceConfig(c)
 }
 func (a *appState) exportImage(show bool) (apiResult, error) {
 	if a.img == nil {
@@ -409,7 +457,7 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		if w != nil && w.kind == "result" {
 			call(user, "ShowWindow", hwnd, 0)
 			a.stopRequest(false)
-			a.speech.Stop()
+			a.stopSpeech()
 			return 0
 		}
 		a.setShortcutRecording(false)

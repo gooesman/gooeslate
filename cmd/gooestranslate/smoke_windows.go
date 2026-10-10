@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/gooesman/gooestranslate/internal/engine"
 	"image"
-	"image/color"
-	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -105,13 +104,14 @@ func smokeTest() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		start := time.Now()
-		blocks, e = engine.Recognize(ctx, engine.HTTPClient(), cfg.OCRURL, original)
+		blocks, e = engine.RecognizeConfigured(ctx, engine.HTTPClient(), cfg, original)
 		if e != nil {
 			return e
 		}
 		report["real_ocr_ms"] = time.Since(start).Milliseconds()
 		report["real_ocr_blocks"] = len(blocks)
 		lines = engine.GroupLines(blocks)
+		report["resolved_target_language"] = engine.ResolveTargetLanguage(cfg.Language, engine.Text(blocks))
 		start = time.Now()
 		values, e := engine.Translate(ctx, engine.HTTPClient(), cfg, lines)
 		if e != nil {
@@ -172,11 +172,25 @@ func (a *appState) runUIProbe() {
 	bridgeOK := ok
 	if bridgeOK {
 		a.post(func() {
-			img := image.NewRGBA(image.Rect(0, 0, 320, 180))
-			draw.Draw(img, img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
-			a.data = resultData{Mode: "image", Image: "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='320'%20height='180'%3E%3Crect%20width='320'%20height='180'%20fill='white'/%3E%3C/svg%3E", Width: 320, Height: 180, OriginalText: "UI smoke fixture", Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, DictionaryEnabled: true, Theme: "dark", Language: "简体中文"}
+			img, err := syntheticImage()
+			if err != nil {
+				a.uiProbe <- false
+				return
+			}
+			var encoded bytes.Buffer
+			if err := png.Encode(&encoded, img); err != nil {
+				a.uiProbe <- false
+				return
+			}
+			blocks := []engine.Block{{Text: "Hello world", Box: [4][2]float64{{20, 20}, {250, 20}, {250, 60}, {20, 60}}}, {Text: "Original image translation", Box: [4][2]float64{{20, 85}, {480, 85}, {480, 135}, {20, 135}}}}
+			a.img = img
+			a.lines = engine.GroupLines(blocks)
+			a.data = resultData{Mode: "image", Image: "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes()), Width: 640, Height: 180, OriginalText: engine.Text(blocks), TranslatedText: "你好，世界\n原图翻译", Blocks: blocks, Lines: []resultLine{}, Translations: []engine.Translation{{ID: 0, Text: "你好，世界"}, {ID: 1, Text: "原图翻译"}}, DictionaryEnabled: true, VocabularyEnabled: true, CoordinatesSupported: true, Theme: "dark", Language: "简体中文", LanguageSetting: "auto", SourceLanguage: "英语", Status: "翻译完成 · 测试图片"}
+			for _, line := range a.lines {
+				a.data.Lines = append(a.data.Lines, resultLine{line.ID, line.Text, line.Bounds})
+			}
 			a.pushResult()
-			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='image'&&r.width===320&&document.getElementById('title').textContent==='原图翻译'&&document.getElementById('app').dataset.view==='image'))")
+			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='image'&&r.width===640&&r.coordinates_supported&&r.language_setting==='auto'&&r.lines.length===2&&document.getElementById('title').textContent==='原图翻译'&&document.getElementById('app').dataset.view==='image'))")
 		})
 		select {
 		case passed := <-a.uiProbe:
@@ -304,6 +318,33 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 			}
 		}
 		report[phase+"_settings_and_result_pixels"] = true
+	}
+	for _, pane := range []string{"translation", "ocr", "vocabulary", "tts"} {
+		a.post(func() {
+			a.settings.browser.Eval("window.openSettingsPane(" + jsonString(pane) + ");uiProbe(document.getElementById('pane-' + " + jsonString(pane) + ").classList.contains('active'))")
+		})
+		select {
+		case passed := <-a.uiProbe:
+			if !passed {
+				return fmt.Errorf("%s 服务页未正确切换", pane)
+			}
+		case <-time.After(8 * time.Second):
+			return fmt.Errorf("%s 服务页切换超时", pane)
+		}
+		time.Sleep(400 * time.Millisecond)
+		completed := make(chan error, 1)
+		a.post(func() {
+			captureWebView(a.settings, filepath.Join(directory, "settings-"+pane+".png"), func(err error) { completed <- err })
+		})
+		select {
+		case err := <-completed:
+			if err != nil {
+				return fmt.Errorf("%s 服务页渲染：%w", pane, err)
+			}
+		case <-time.After(12 * time.Second):
+			return fmt.Errorf("%s 服务页渲染超时", pane)
+		}
+		report[pane+"_service_page_pixels"] = true
 	}
 	return nil
 }

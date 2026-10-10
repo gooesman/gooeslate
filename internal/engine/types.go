@@ -23,20 +23,93 @@ type Translation struct {
 	Text string `json:"text"`
 }
 type Config struct {
-	OCRURL          string           `json:"ocr_url"`
-	BaseURL         string           `json:"base_url"`
-	Model           string           `json:"model"`
-	APIKey          string           `json:"-"`
-	EncryptedKey    string           `json:"encrypted_key,omitempty"`
-	Language        string           `json:"language"`
-	DisableThinking bool             `json:"disable_thinking"`
-	Theme           string           `json:"theme"`
-	DefaultAction   string           `json:"default_action"`
-	CloseToTray     bool             `json:"close_to_tray"`
-	AutoCopyOCR     bool             `json:"auto_copy_ocr"`
-	Hotkeys         Hotkeys          `json:"hotkeys"`
-	Dictionary      DictionaryConfig `json:"dictionary"`
-	TTS             TTSConfig        `json:"tts"`
+	OCRURL              string               `json:"ocr_url"`
+	BaseURL             string               `json:"base_url"`
+	Model               string               `json:"model"`
+	APIKey              string               `json:"-"`
+	EncryptedKey        string               `json:"encrypted_key,omitempty"`
+	Language            string               `json:"language"`
+	DisableThinking     bool                 `json:"disable_thinking"`
+	Theme               string               `json:"theme"`
+	DefaultAction       string               `json:"default_action"`
+	CloseToTray         bool                 `json:"close_to_tray"`
+	AutoCopyOCR         bool                 `json:"auto_copy_ocr"`
+	Hotkeys             Hotkeys              `json:"hotkeys"`
+	Dictionary          DictionaryConfig     `json:"dictionary"`
+	TTS                 TTSConfig            `json:"tts"`
+	TranslationServices []TranslationService `json:"translation_services"`
+	ActiveTranslationID string               `json:"active_translation"`
+	OCRServices         []OCRService         `json:"ocr_services"`
+	ActiveOCRID         string               `json:"active_ocr"`
+	TTSServices         []TTSService         `json:"tts_services"`
+	ActiveTTSID         string               `json:"active_tts"`
+	AutoCopyImage       bool                 `json:"auto_copy_image"`
+	Vocabulary          VocabularyConfig     `json:"vocabulary"`
+}
+
+type TranslationService struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Provider        string  `json:"provider"`
+	BaseURL         string  `json:"base_url"`
+	Model           string  `json:"model"`
+	APIKey          string  `json:"-"`
+	EncryptedKey    string  `json:"encrypted_key,omitempty"`
+	Headers         string  `json:"headers"`
+	BodyTemplate    string  `json:"body_template"`
+	TimeoutMS       int     `json:"timeout_ms"`
+	Temperature     float64 `json:"temperature"`
+	DisableThinking bool    `json:"disable_thinking"`
+	SystemPrompt    string  `json:"system_prompt"`
+	UserPrompt      string  `json:"user_prompt"`
+	ResponsePath    string  `json:"response_path"`
+	RequestMode     string  `json:"request_mode"`
+}
+type OCRService struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	URL           string `json:"url"`
+	Model         string `json:"model"`
+	APIKey        string `json:"-"`
+	EncryptedKey  string `json:"encrypted_key,omitempty"`
+	Headers       string `json:"headers"`
+	BodyTemplate  string `json:"body_template"`
+	TimeoutMS     int    `json:"timeout_ms"`
+	ImageField    string `json:"image_field"`
+	ImageEncoding string `json:"image_encoding"`
+	FormFields    string `json:"form_fields"`
+	ResponsePath  string `json:"response_path"`
+	TextField     string `json:"text_field"`
+	BoxField      string `json:"box_field"`
+	BoxFormat     string `json:"box_format"`
+	Coordinates   bool   `json:"coordinates"`
+}
+type TTSService struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Provider     string  `json:"provider"`
+	URL          string  `json:"url"`
+	Model        string  `json:"model"`
+	Voice        string  `json:"voice"`
+	Rate         int     `json:"rate"`
+	Speed        float64 `json:"speed"`
+	AutoRead     bool    `json:"auto_read"`
+	APIKey       string  `json:"-"`
+	EncryptedKey string  `json:"encrypted_key,omitempty"`
+	Headers      string  `json:"headers"`
+	BodyTemplate string  `json:"body_template"`
+	TimeoutMS    int     `json:"timeout_ms"`
+}
+type VocabularyConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Provider     string `json:"provider"`
+	BaseURL      string `json:"base_url"`
+	Language     string `json:"language"`
+	CategoryID   string `json:"category_id"`
+	APIKey       string `json:"-"`
+	EncryptedKey string `json:"encrypted_key,omitempty"`
+	TimeoutMS    int    `json:"timeout_ms"`
 }
 type Hotkeys struct {
 	Capture   string `json:"capture"`
@@ -57,7 +130,7 @@ type TTSConfig struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Language: "简体中文", DisableThinking: true, Theme: "dark", DefaultAction: "choose", CloseToTray: true, Hotkeys: Hotkeys{"Ctrl+Shift+S", "Ctrl+Alt+O", "Ctrl+Alt+T", "Ctrl+Alt+I"}, Dictionary: DictionaryConfig{Enabled: true, Provider: "openai"}, TTS: TTSConfig{Provider: "system"}}
+	return NormalizeConfig(Config{Language: "auto", DisableThinking: true, AutoCopyImage: true, Theme: "dark", DefaultAction: "choose", CloseToTray: true, Hotkeys: Hotkeys{"Ctrl+Shift+S", "Ctrl+Alt+O", "Ctrl+Alt+T", "Ctrl+Alt+I"}, Dictionary: DictionaryConfig{Enabled: true, Provider: "openai"}, TTS: TTSConfig{Provider: "system"}})
 }
 func (b Block) Bounds() Rect {
 	x, y, r, d := b.Box[0][0], b.Box[0][1], b.Box[0][0], b.Box[0][1]
@@ -91,6 +164,19 @@ func FromPoints(a, b Point) Rect {
 	return Rect{math.Min(a.X, b.X), math.Min(a.Y, b.Y), math.Abs(a.X - b.X), math.Abs(a.Y - b.Y)}
 }
 func GroupLines(blocks []Block) []Line {
+	// Services without coordinates supply ordered text entries. Do not infer a
+	// spatial row from zero rectangles: that would join unrelated entries.
+	for _, b := range blocks {
+		if r := b.Bounds(); r.W <= 0 || r.H <= 0 {
+			out := make([]Line, 0, len(blocks))
+			for _, item := range blocks {
+				if strings.TrimSpace(item.Text) != "" {
+					out = append(out, Line{ID: len(out), Text: item.Text, Bounds: item.Bounds()})
+				}
+			}
+			return out
+		}
+	}
 	items := append([]Block(nil), blocks...)
 	sort.SliceStable(items, func(i, j int) bool { a, b := items[i].Bounds(), items[j].Bounds(); return a.Y+a.H/2 < b.Y+b.H/2 })
 	var rows [][]Block

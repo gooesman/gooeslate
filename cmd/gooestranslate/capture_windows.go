@@ -53,6 +53,7 @@ func newCaptureBitmap(width, height int, pixels []byte) (captureBitmap, error) {
 type CaptureController struct {
 	owner, hwnd         uintptr
 	onCrop              func(*image.RGBA, string)
+	onComplete          func(*image.RGBA, string)
 	onCancel            func()
 	mode                string
 	active, waiting     bool
@@ -84,6 +85,11 @@ func NewCaptureController(owner uintptr, onCrop func(*image.RGBA, string), onCan
 
 func (c *CaptureController) Active() bool     { return c.active }
 func (c *CaptureController) LastError() error { return c.lastError }
+
+// SetOnComplete runs only for a confirmed, nonempty screen crop, after the
+// overlay closes and before OCR/translation receives it. It never runs for
+// cancellation or images opened from a file. Configure it on the UI thread.
+func (c *CaptureController) SetOnComplete(f func(*image.RGBA, string)) { c.onComplete = f }
 
 func (c *CaptureController) Start(mode string) error {
 	if c.active {
@@ -320,11 +326,17 @@ func (c *CaptureController) fail(err error) {
 }
 
 func (c *CaptureController) accept(mode string) {
+	if !c.active || !c.ready {
+		return
+	}
 	crop := captureCrop(c.snapshot, c.selected())
 	if crop == nil {
 		return
 	}
 	c.release(false)
+	if c.onComplete != nil {
+		c.onComplete(crop, mode)
+	}
 	if c.onCrop != nil {
 		c.onCrop(crop, mode)
 	}

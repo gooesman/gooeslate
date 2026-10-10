@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/gooesman/gooestranslate/internal/engine"
@@ -50,27 +49,28 @@ func loadConfig() (engine.Config, error) {
 	if err = json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("设置文件无法读取，请重新填写")
 	}
-	if c.EncryptedKey != "" {
-		encrypted, e := base64.StdEncoding.DecodeString(c.EncryptedKey)
-		if e != nil {
-			return c, e
-		}
-		raw, e := protect(encrypted, true)
-		if e != nil {
-			return c, e
-		}
-		c.APIKey = string(raw)
+	var fields map[string]json.RawMessage
+	json.Unmarshal(b, &fields)
+	if _, ok := fields["translation_services"]; !ok {
+		c.TranslationServices = nil
+		c.ActiveTranslationID = ""
 	}
-	return c, nil
+	if _, ok := fields["ocr_services"]; !ok {
+		c.OCRServices = nil
+		c.ActiveOCRID = ""
+	}
+	if _, ok := fields["tts_services"]; !ok {
+		c.TTSServices = nil
+		c.ActiveTTSID = ""
+	}
+	err = decryptConfigCredentials(&c)
+	c = engine.NormalizeConfig(c)
+	return c, err
 }
 func saveConfig(c engine.Config) error {
-	// Preserve an unreadable DPAPI blob until the user replaces or explicitly clears it.
-	if c.APIKey != "" || c.EncryptedKey == "" {
-		encrypted, err := protect([]byte(c.APIKey), false)
-		if err != nil {
-			return err
-		}
-		c.EncryptedKey = base64.StdEncoding.EncodeToString(encrypted)
+	c = cloneConfig(c)
+	if err := encryptConfigCredentials(&c); err != nil {
+		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

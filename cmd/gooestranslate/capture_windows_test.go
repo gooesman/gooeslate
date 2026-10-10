@@ -69,8 +69,18 @@ func TestCaptureAcceptReleasesBeforeShowingResult(t *testing.T) {
 	defer c.Close()
 	c.start, c.end, c.ready = image.Pt(4, 6), image.Pt(18, 17), true
 	called := false
+	completed := false
+	c.SetOnComplete(func(img *image.RGBA, mode string) {
+		completed = true
+		if called || c.Active() || c.snapshot != nil || img.Bounds() != image.Rect(0, 0, 14, 11) || mode != "translate" {
+			t.Fatal("completion must receive final crop after overlay closes and before OCR")
+		}
+	})
 	c.onCrop = func(img *image.RGBA, mode string) {
 		called = true
+		if !completed {
+			t.Fatal("screenshot copy opportunity must precede OCR/result callback")
+		}
 		if c.Active() || c.snapshot != nil || c.original.dc != 0 || c.dim.dc != 0 || c.back.dc != 0 {
 			t.Fatal("result callback must run after capture resources are released")
 		}
@@ -81,6 +91,31 @@ func TestCaptureAcceptReleasesBeforeShowingResult(t *testing.T) {
 	c.accept("translate")
 	if !called {
 		t.Fatal("accepted screenshot did not invoke result callback")
+	}
+	c.accept("ocr")
+}
+
+func TestCaptureCanceledUnconfirmedAndSmallCropDoNotComplete(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	for _, action := range []string{"cancel", "unconfirmed", "small"} {
+		t.Run(action, func(t *testing.T) {
+			c := &CaptureController{active: true, snapshot: image.NewRGBA(image.Rect(0, 0, 20, 20)), ready: true}
+			c.start, c.end = image.Pt(3, 3), image.Pt(13, 13)
+			c.SetOnComplete(func(*image.RGBA, string) { t.Fatal("incomplete screenshot must never trigger clipboard callback") })
+			c.onCrop = func(*image.RGBA, string) { t.Fatal("incomplete screenshot must never reach OCR") }
+			switch action {
+			case "cancel":
+				c.cancel()
+			case "unconfirmed":
+				c.ready = false
+				c.accept("image")
+			case "small":
+				c.end = image.Pt(4, 4)
+				c.accept("ocr")
+			}
+			c.Close()
+		})
 	}
 }
 

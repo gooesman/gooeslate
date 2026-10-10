@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -41,21 +41,26 @@ type webWindow struct {
 	navigationError int32
 }
 type resultData struct {
-	Image             string               `json:"image,omitempty"`
-	Width             int                  `json:"width"`
-	Height            int                  `json:"height"`
-	Blocks            []engine.Block       `json:"blocks"`
-	Lines             []resultLine         `json:"lines"`
-	Translations      []engine.Translation `json:"translations"`
-	OriginalText      string               `json:"original_text"`
-	TranslatedText    string               `json:"translated_text"`
-	Mode              string               `json:"mode"`
-	Status            string               `json:"status"`
-	Busy              bool                 `json:"busy"`
-	Error             string               `json:"error"`
-	Language          string               `json:"language"`
-	Theme             string               `json:"theme"`
-	DictionaryEnabled bool                 `json:"dictionary_enabled"`
+	Image                string               `json:"image,omitempty"`
+	Width                int                  `json:"width"`
+	Height               int                  `json:"height"`
+	Blocks               []engine.Block       `json:"blocks"`
+	Lines                []resultLine         `json:"lines"`
+	Translations         []engine.Translation `json:"translations"`
+	OriginalText         string               `json:"original_text"`
+	TranslatedText       string               `json:"translated_text"`
+	Mode                 string               `json:"mode"`
+	Status               string               `json:"status"`
+	Busy                 bool                 `json:"busy"`
+	Error                string               `json:"error"`
+	Language             string               `json:"language"`
+	LanguageSetting      string               `json:"language_setting"`
+	SourceLanguage       string               `json:"source_language"`
+	VocabularyEnabled    bool                 `json:"vocabulary_enabled"`
+	CoordinatesSupported bool                 `json:"coordinates_supported"`
+	ClipboardError       string               `json:"clipboard_error,omitempty"`
+	Theme                string               `json:"theme"`
+	DictionaryEnabled    bool                 `json:"dictionary_enabled"`
 }
 type resultLine struct {
 	ID     int         `json:"id"`
@@ -68,6 +73,12 @@ type appState struct {
 	windows                 map[uintptr]*webWindow
 	capture                 *CaptureController
 	speech                  *SpeechService
+	remoteSpeech            *RemoteSpeechService
+	speechCancel            context.CancelFunc
+	speechGeneration        uint64
+	vocabularyCancel        context.CancelFunc
+	vocabularyGeneration    uint64
+	captureClipboardError   string
 	voices                  []SpeechVoice
 	queue                   chan func()
 	keys                    map[int]engine.Hotkey
@@ -132,6 +143,8 @@ func run() int {
 	}
 	app.speech = NewSpeechService()
 	defer app.speech.Close()
+	app.remoteSpeech = NewRemoteSpeechService()
+	defer app.remoteSpeech.Close()
 	app.voices, _ = app.speech.Voices()
 	app.icon = createAppIcon()
 	if app.icon != 0 {
@@ -156,6 +169,14 @@ func run() int {
 		if app.captureResultWasVisible {
 			app.showResult()
 			app.pushResult()
+		}
+	})
+	app.capture.SetOnComplete(func(img *image.RGBA, _ string) {
+		app.captureClipboardError = ""
+		if app.cfg.AutoCopyImage {
+			if err := clipboardImage(app.settings.hwnd, img); err != nil {
+				app.captureClipboardError = "截图已完成，但复制图片失败：" + err.Error()
+			}
 		}
 	})
 	if !uiTest {
@@ -187,10 +208,7 @@ func configureStdin() {
 	e := json.NewDecoder(io.LimitReader(os.Stdin, 65536)).Decode(&input)
 	if e == nil {
 		raw, _ := json.Marshal(input)
-		e = json.Unmarshal(raw, &c)
-		if k, ok := input["api_key"]; ok {
-			json.Unmarshal(k, &c.APIKey)
-		}
+		c, _, e = mergeSettings(c, raw)
 	}
 	if e == nil {
 		e = saveConfig(c)
@@ -272,7 +290,7 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	return w, nil
 }
 
-const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
+const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
 
 func (a *appState) post(f func()) {
 	a.queue <- f
@@ -316,11 +334,13 @@ func (a *appState) pushResult() {
 }
 func (a *appState) receiveImage(img *image.RGBA, mode string) {
 	a.stopRequest(false)
+	a.stopSpeech()
 	a.img = img
 	a.snapshotID++
 	snapshot := a.snapshotID
 	cfg := a.cfg
-	a.data = resultData{Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), Mode: mode, Language: cfg.Language, Theme: cfg.Theme, DictionaryEnabled: cfg.Dictionary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Status: "正在识别…"}
+	a.data = resultData{Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), Mode: mode, Language: cfg.Language, LanguageSetting: cfg.Language, VocabularyEnabled: cfg.Vocabulary.Enabled, CoordinatesSupported: engine.ActiveOCR(cfg).Coordinates, ClipboardError: a.captureClipboardError, Theme: cfg.Theme, DictionaryEnabled: cfg.Dictionary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Status: "正在识别…"}
+	a.captureClipboardError = ""
 	a.lastImageSent = ""
 	a.lines = nil
 	a.result.browser.Eval("window.setResult&&window.setResult({image:'',original_text:'',translated_text:'',blocks:[],lines:[],translations:[]})")
@@ -344,9 +364,12 @@ func (a *appState) receiveImage(img *image.RGBA, mode string) {
 	}()
 	a.recognize(mode)
 }
-func (a *appState) newTask() (context.Context, uint64) {
+func (a *appState) newTask(timeoutMS int) (context.Context, uint64) {
 	a.generation++
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	if timeoutMS <= 0 {
+		timeoutMS = 90000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
 	a.cancel = cancel
 	a.data.Busy = true
 	a.data.Error = ""
@@ -357,12 +380,12 @@ func (a *appState) recognize(mode string) {
 		return
 	}
 	cfg := a.cfg
-	ctx, generation := a.newTask()
+	ctx, generation := a.newTask(engine.ActiveOCR(cfg).TimeoutMS)
 	img := a.img
 	a.data.Status = "正在识别图片中的文字…"
 	a.pushResult()
 	go func() {
-		blocks, e := engine.Recognize(ctx, engine.HTTPClient(), cfg.OCRURL, img)
+		blocks, e := engine.RecognizeConfigured(ctx, engine.HTTPClient(), cfg, img)
 		a.post(func() {
 			if generation != a.generation {
 				return
@@ -381,13 +404,15 @@ func (a *appState) recognize(mode string) {
 				a.data.Lines = append(a.data.Lines, resultLine{l.ID, l.Text, l.Bounds})
 			}
 			a.data.OriginalText = engine.Text(blocks)
+			a.data.SourceLanguage = engine.DetectSourceLanguage(a.data.OriginalText)
+			a.data.Language = engine.ResolveTargetLanguage(a.data.LanguageSetting, a.data.OriginalText)
 			a.data.Status = fmt.Sprintf("识别完成 · %d 个文字块", len(blocks))
 			if cfg.AutoCopyOCR && a.data.OriginalText != "" {
 				clipboard(a.result.hwnd, a.data.OriginalText)
 			}
 			a.pushResult()
 			if mode == "translate" || mode == "image" {
-				a.translate(a.data.Language)
+				a.translate(a.data.LanguageSetting)
 			}
 		})
 	}()
@@ -404,10 +429,11 @@ func (a *appState) translate(language string) {
 	if language != "" {
 		cfg.Language = language
 	}
-	a.data.Language = cfg.Language
+	a.data.LanguageSetting = cfg.Language
+	a.data.Language = engine.ResolveTargetLanguage(cfg.Language, a.data.OriginalText)
 	a.data.Translations = []engine.Translation{}
 	a.data.TranslatedText = ""
-	ctx, generation := a.newTask()
+	ctx, generation := a.newTask(engine.ActiveTranslation(cfg).TimeoutMS)
 	lines := append([]engine.Line(nil), a.lines...)
 	a.data.Status = "正在翻译…"
 	a.pushResult()
@@ -432,8 +458,8 @@ func (a *appState) translate(language string) {
 			a.data.TranslatedText = strings.Join(texts, "\n")
 			a.data.Status = "翻译完成"
 			a.pushResult()
-			if cfg.TTS.AutoRead {
-				a.speech.Speak(a.data.TranslatedText, cfg.TTS.Voice, cfg.TTS.Rate)
+			if engine.ActiveTTS(cfg).AutoRead {
+				a.speak(a.data.TranslatedText)
 			}
 		})
 	}()
@@ -449,12 +475,8 @@ func (a *appState) stopRequest(notify bool) {
 		a.cancel()
 		a.cancel = nil
 	}
-	if a.lookupCancel != nil {
-		a.lookupCancel()
-		a.lookupCancel = nil
-	}
+	a.cancelWordRequests()
 	a.generation++
-	a.lookupGeneration++
 	a.data.Busy = false
 	if notify {
 		a.data.Status = "已取消"
@@ -471,7 +493,14 @@ func (a *appState) lookup(word string, requestID int) {
 	}
 	a.lookupGeneration++
 	generation := a.lookupGeneration
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	timeout := engine.ActiveTranslation(a.cfg).TimeoutMS
+	if a.cfg.Dictionary.Provider == "eudic" {
+		timeout = a.cfg.Vocabulary.TimeoutMS
+	}
+	if timeout <= 0 {
+		timeout = 45000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	a.lookupCancel = cancel
 	cfg := a.cfg
 	go func() {
@@ -504,7 +533,7 @@ func (a *appState) startCapture(mode string) bool {
 		return false
 	}
 	a.setShortcutRecording(false)
-	a.speech.Stop()
+	a.stopSpeech()
 	a.captureResultWasVisible = a.result != nil && call(user, "IsWindowVisible", a.result.hwnd) != 0
 	if a.result != nil {
 		call(user, "ShowWindow", a.result.hwnd, 0)
@@ -552,7 +581,7 @@ func (a *appState) quit() {
 	if a.capture != nil {
 		a.capture.Close()
 	}
-	a.speech.Stop()
+	a.stopSpeech()
 	for id := range a.keys {
 		call(user, "UnregisterHotKey", a.settings.hwnd, u(id))
 	}
