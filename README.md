@@ -1,6 +1,6 @@
 # gooestranslate
 
-用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词、收藏和朗读。**v0.3.2** 将翻译、识别、语音、词典与生词本改为服务列表，提供独立编辑界面和服务测试，明确显示当前使用项、配置缺失及最近测试结果。
+用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词、收藏和朗读。服务列表提供独立编辑和测试，显示当前使用项、配置缺失及最近测试结果。**v0.3.3** 修复 OpenAI 兼容服务只填域名时的接口路径，翻译、模型查词、视觉识别和语音均支持自动补全；遇到 HTML 网页响应会提示检查 API 地址。
 
 截图工具使用 Win32 绘制，设置与结果界面使用内嵌 WebView2。运行程序需要 Microsoft Edge WebView2 Runtime，无需 Node、Python 或额外插件运行环境。
 
@@ -46,7 +46,16 @@
 
 ## 翻译服务与语言
 
-可选择 OpenAI 兼容、Ollama 或自定义 HTTP 预设。OpenAI 兼容地址会自动添加 `/chat/completions`，也接受含该路径的完整地址；自定义 HTTP 使用填写的完整地址，不添加路径。
+可选择 OpenAI 兼容、Ollama 或自定义 HTTP 预设。OpenAI 兼容服务只填域名时，自动使用 `/v1/chat/completions`；填写 API 基础路径时保留该路径并补全 `/chat/completions`，也接受完整接口地址。模型查词及 OpenAI 视觉识别使用相同规则；兼容语音的裸域名自动使用 `/v1/audio/speech`。自定义 HTTP 使用填写的完整地址，不添加路径。
+
+| 填写的 OpenAI 兼容地址 | 实际翻译请求地址 |
+| --- | --- |
+| `https://api.example.com` | `https://api.example.com/v1/chat/completions` |
+| `https://api.example.com/v1` | `https://api.example.com/v1/chat/completions` |
+| `https://api.example.com/proxy/openai` | `https://api.example.com/proxy/openai/chat/completions` |
+| `https://api.example.com/chat/completions` | 保留完整地址 |
+
+如果测试提示“服务返回了 HTML 网页而非 JSON”，请求可能到达了管理网页或错误路径，请核对供应商提供的 API 地址。
 
 目标语言默认“自动中英互译”，也可固定为简体中文、繁体中文、英语、日语或韩语。自动模式使用简单启发式：文本包含汉字且汉字至少占字母字符的一半时译为英语，其它内容译为简体中文。结果窗口显示推定的原文语言与实际目标语言，并可单独调整本次翻译目标。这不是完整语言检测，混合语言或其它语种内容建议手动指定目标语言。
 

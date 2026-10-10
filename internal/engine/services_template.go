@@ -272,6 +272,9 @@ func responseValue(raw []byte, path string) (any, error) {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
 	if d.Decode(&value) != nil {
+		if strings.HasPrefix(http.DetectContentType(bytes.TrimSpace(bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}))), "text/html") {
+			return nil, errors.New("服务返回了 HTML 网页而非 JSON，请检查服务地址是否为 API 接口（OpenAI 兼容通常使用 /v1）")
+		}
 		return nil, errors.New("服务响应不是有效 JSON")
 	}
 	var trailing any
@@ -306,7 +309,21 @@ func valueAtPath(value any, path string) (any, error) {
 	return value, nil
 }
 func chatEndpoint(base string) string {
-	return appendServicePath(base, "/chat/completions")
+	return openAIEndpoint(base, "/chat/completions")
+}
+func openAIEndpoint(base, path string) string {
+	base = strings.TrimSpace(base)
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	// Compatible gateways commonly expose their web UI at the origin. An
+	// explicit API prefix or complete endpoint remains the caller's choice.
+	if strings.TrimRight(u.Path, "/") == "" {
+		u.Path = "/v1"
+		u.RawPath = ""
+	}
+	return appendServicePath(u.String(), path)
 }
 func appendServicePath(base, path string) string {
 	base = strings.TrimSpace(base)

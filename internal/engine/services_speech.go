@@ -49,7 +49,7 @@ func FetchSpeech(ctx context.Context, client *http.Client, p TTSService, text st
 	payload := map[string]any{"text": text, "voice": p.Voice, "speed": p.Speed}
 	endpoint := strings.TrimSpace(p.URL)
 	if p.Provider == "openai" {
-		endpoint = appendServicePath(endpoint, "/audio/speech")
+		endpoint = openAIEndpoint(endpoint, "/audio/speech")
 		payload = map[string]any{"model": p.Model, "input": text, "voice": p.Voice, "response_format": "wav", "speed": p.Speed}
 	}
 	if p.BodyTemplate != "" {
