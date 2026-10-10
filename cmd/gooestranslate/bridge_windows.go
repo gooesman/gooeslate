@@ -90,6 +90,28 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 		json.Unmarshal(arg(0), &ok)
 		a.uiProbe <- ok
 		return true, nil
+	case "exportConfiguration":
+		if w.kind != "settings" {
+			return nil, fmt.Errorf("请在设置窗口导出配置")
+		}
+		return a.exportConfiguration(w.hwnd, arg(0))
+	case "chooseConfigurationImport":
+		if w.kind != "settings" {
+			return nil, fmt.Errorf("请在设置窗口导入配置")
+		}
+		return a.chooseConfigurationImport(w.hwnd)
+	case "applyConfigurationImport", "cancelConfigurationImport":
+		if w.kind != "settings" {
+			return nil, fmt.Errorf("请在设置窗口导入配置")
+		}
+		var token string
+		if json.Unmarshal(arg(0), &token) != nil {
+			return nil, fmt.Errorf("导入预览标识无效")
+		}
+		if r.Method == "cancelConfigurationImport" {
+			return a.cancelConfigurationImport(token), nil
+		}
+		return a.applyConfigurationImport(token)
 	case "saveSettings":
 		if w.kind != "settings" {
 			return nil, fmt.Errorf("请在设置窗口修改服务")
@@ -223,29 +245,33 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 	return nil, fmt.Errorf("不支持的界面操作")
 }
 func (a *appState) saveSettings(raw json.RawMessage) (apiResult, error) {
+	if a.configurationBusy {
+		return apiResult{}, fmt.Errorf("请先完成当前配置操作")
+	}
 	cfg, keyChanged, e := mergeSettings(a.cfg, raw)
 	if e != nil {
 		return apiResult{}, e
 	}
-	if e := validateSettings(cfg); e != nil {
-		return apiResult{}, e
+	return a.applyConfiguration(cfg, keyChanged, false)
+}
+
+func (a *appState) applyConfiguration(cfg engine.Config, keyChanged, fullImport bool) (apiResult, error) {
+	if err := validateSettings(cfg); err != nil {
+		return apiResult{}, err
 	}
 	if a.testMode {
 		return apiResult{true, "界面自测未写入个人设置"}, nil
 	}
 	old := a.cfg
-	errs := a.replaceKeys(effectiveHotkeys(cfg))
-	if len(errs) > 0 {
-		a.replaceKeys(effectiveHotkeys(old))
-		return apiResult{}, fmt.Errorf("快捷键保存失败：%s", strings.Join(errs, "；"))
+	if err := persistConfigurationChange(old, cfg, a.replaceKeys, saveConfig); err != nil {
+		return apiResult{}, err
 	}
-	if e := saveConfig(cfg); e != nil {
-		a.replaceKeys(effectiveHotkeys(old))
-		return apiResult{}, fmt.Errorf("设置写入失败：%w", e)
-	}
+	a.configurationRevision++
+	a.pendingConfigurationImport = nil
+
 	a.stopSpeech()
 	a.cancelWordRequests()
-	if old.Selection != cfg.Selection || old.Hotkeys.Selection != cfg.Hotkeys.Selection {
+	if fullImport || old.Selection != cfg.Selection || old.Hotkeys.Selection != cfg.Hotkeys.Selection {
 		a.stopRequest(false)
 	}
 	a.cfg = cfg

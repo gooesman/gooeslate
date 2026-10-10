@@ -411,6 +411,32 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 		report[pane+"_service_editor_pixels"] = true
 	}
 	a.post(func() {
+		a.settings.browser.Eval("window.openSettingsPane('transfer');Promise.all([window.exportConfiguration({include_credentials:true}),window.chooseConfigurationImport()]).then(r=>uiProbe(document.getElementById('pane-transfer').classList.contains('active')&&!document.getElementById('exportCredentials').checked&&r.every(x=>x.ok&&x.cancelled)))")
+	})
+	select {
+	case passed := <-a.uiProbe:
+		if !passed {
+			return fmt.Errorf("配置导入与导出入口或测试隔离验证失败")
+		}
+	case <-time.After(8 * time.Second):
+		return fmt.Errorf("配置导入与导出控件验证超时")
+	}
+	time.Sleep(250 * time.Millisecond)
+	transferCapture := make(chan error, 1)
+	a.post(func() {
+		captureWebView(a.settings, filepath.Join(directory, "settings-transfer.png"), func(err error) { transferCapture <- err })
+	})
+	select {
+	case err := <-transferCapture:
+		if err != nil {
+			return fmt.Errorf("配置导入与导出页面渲染：%w", err)
+		}
+	case <-time.After(12 * time.Second):
+		return fmt.Errorf("配置导入与导出页面渲染超时")
+	}
+	report["configuration_transfer_page_pixels"] = true
+	report["configuration_transfer_bridge_without_file_operations"] = true
+	a.post(func() {
 		a.settings.browser.Eval("window.testService({kind:'tts',service:{id:'tts-1',provider:'system'}}).then(r=>uiProbe(r.ok===false&&r.message.includes('界面自测')))")
 	})
 	select {

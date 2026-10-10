@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.5"
+const version = "0.3.6"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -68,43 +68,46 @@ type resultLine struct {
 	Bounds engine.Rect `json:"bounds"`
 }
 type appState struct {
-	cfg                     engine.Config
-	settings, result        *webWindow
-	windows                 map[uintptr]*webWindow
-	capture                 *CaptureController
-	selection               *SelectionController
-	speech                  *SpeechService
-	remoteSpeech            *RemoteSpeechService
-	speechCancel            context.CancelFunc
-	speechGeneration        uint64
-	vocabularyCancel        context.CancelFunc
-	vocabularyGeneration    uint64
-	serviceProbes           map[string]serviceProbeTask
-	serviceProbeResults     map[string]serviceProbeRecord
-	captureClipboardError   string
-	voices                  []SpeechVoice
-	queue                   chan func()
-	keys                    map[int]engine.Hotkey
-	hotkeyErrors            []string
-	shortcutRecording       bool
-	loadError               string
-	tray                    bool
-	icon                    uintptr
-	img                     *image.RGBA
-	snapshotID              uint64
-	lastImageSent           string
-	data                    resultData
-	lines                   []engine.Line
-	generation              uint64
-	lookupGeneration        uint64
-	cancel                  context.CancelFunc
-	lookupCancel            context.CancelFunc
-	pinned                  bool
-	exiting                 bool
-	testMode                bool
-	testExitCode            int
-	uiProbe                 chan bool
-	captureResultWasVisible bool
+	configurationRevision      uint64
+	configurationBusy          bool
+	pendingConfigurationImport *stagedConfigurationImport
+	cfg                        engine.Config
+	settings, result           *webWindow
+	windows                    map[uintptr]*webWindow
+	capture                    *CaptureController
+	selection                  *SelectionController
+	speech                     *SpeechService
+	remoteSpeech               *RemoteSpeechService
+	speechCancel               context.CancelFunc
+	speechGeneration           uint64
+	vocabularyCancel           context.CancelFunc
+	vocabularyGeneration       uint64
+	serviceProbes              map[string]serviceProbeTask
+	serviceProbeResults        map[string]serviceProbeRecord
+	captureClipboardError      string
+	voices                     []SpeechVoice
+	queue                      chan func()
+	keys                       map[int]engine.Hotkey
+	hotkeyErrors               []string
+	shortcutRecording          bool
+	loadError                  string
+	tray                       bool
+	icon                       uintptr
+	img                        *image.RGBA
+	snapshotID                 uint64
+	lastImageSent              string
+	data                       resultData
+	lines                      []engine.Line
+	generation                 uint64
+	lookupGeneration           uint64
+	cancel                     context.CancelFunc
+	lookupCancel               context.CancelFunc
+	pinned                     bool
+	exiting                    bool
+	testMode                   bool
+	testExitCode               int
+	uiProbe                    chan bool
+	captureResultWasVisible    bool
 }
 
 var app *appState
@@ -307,7 +310,7 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	return w, nil
 }
 
-const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openEudicAuthorization','testService','listModels']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
+const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','exportConfiguration','chooseConfigurationImport','applyConfigurationImport','cancelConfigurationImport','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openEudicAuthorization','testService','listModels']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
 
 func (a *appState) post(f func()) {
 	a.queue <- f
