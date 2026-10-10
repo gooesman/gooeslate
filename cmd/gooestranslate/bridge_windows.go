@@ -39,6 +39,9 @@ func (a *appState) rpc(w *webWindow, raw string) {
 		return
 	}
 	result, e := a.handleRPC(w, req)
+	if a.exiting || !w.ready {
+		return
+	}
 	ok := e == nil
 	if e != nil {
 		result = e.Error()
@@ -363,7 +366,19 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case 5:
 		if w != nil && w.ready {
-			w.browser.Resize()
+			w.syncVisibility()
+		}
+		return 0
+	case 0x18:
+		if w != nil && w.ready {
+			// WM_SHOWWINDOW arrives before the parent visibility flag changes.
+			if wp == 0 {
+				w.browser.Hide()
+			} else {
+				// Screenshot recovery also uses raw ShowWindow calls. Wait until
+				// ShowWindow has updated the parent before reading its state.
+				a.post(w.syncVisibility)
+			}
 		}
 		return 0
 	case 3:

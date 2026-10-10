@@ -1,6 +1,6 @@
 # gooestranslate
 
-用 Go 实现的 Windows 桌面翻译工具。**v0.2.0** 将主窗口改为设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词和朗读。
+用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词和朗读。**v0.2.1** 修复启动白屏及窗口隐藏、恢复时的界面刷新问题。
 
 截图工具使用 Win32 绘制，设置与结果界面使用内嵌 WebView2。运行程序需要 Microsoft Edge WebView2 Runtime，无需 Node、Python 或额外插件运行环境。
 
@@ -121,9 +121,12 @@ go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/gooestranslate.exe ./c
 go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
 ./dist/gooestranslate-check.exe --smoke-test test-artifacts
 ./dist/gooestranslate-check.exe --ui-smoke-test test-artifacts
+./dist/gooestranslate-check.exe --render-smoke-test test-artifacts
 ```
 
-`--smoke-test` 检查截图缓存与操作栏、译文图片导出、DPAPI 和系统声音枚举。`--ui-smoke-test` 检查实际 WebView2 界面加载、设置和结果通信、密钥字段隔离，以及原图结果推送。两者不截取真实桌面、不调用外部接口、不播放朗读音频。
+`--smoke-test` 检查截图缓存与操作栏、译文图片导出、DPAPI 和系统声音枚举。`--ui-smoke-test` 检查 WebView2 页面逻辑、设置和结果通信、密钥字段隔离，以及原图结果推送；它不显示窗口，不能单独验证画面正常。
+
+`--render-smoke-test` 还会显示设置和结果窗口，使用 WebView2 CapturePreview 保存应用自身的画面并检查 PNG 像素。覆盖首次打开、隐藏后恢复、最小化后恢复、最大化及还原，同时检查控制器可见状态和尺寸。失败时写入诊断报告并以非零状态退出。三个测试都不截取真实桌面、不调用外部接口、不写入个人设置、不播放朗读音频。
 
 配置本机服务后，可显式运行真实接口测试。它上传程序生成的测试图片，执行 OCR、翻译和模型查词，可能产生少量 API 用量：
 

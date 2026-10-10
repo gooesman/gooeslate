@@ -20,6 +20,14 @@ jobs:
       - run: go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/gooestranslate.exe ./cmd/gooestranslate
       - run: go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
       - run: ./dist/gooestranslate-check.exe --smoke-test test-artifacts
+      - name: Verify visible WebView rendering
+        run: ./dist/gooestranslate-check.exe --render-smoke-test test-artifacts
+        timeout-minutes: 2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: rendering-diagnostics
+          path: test-artifacts/
       - uses: actions/upload-artifact@v4
         with:
           name: gooestranslate-windows-x64

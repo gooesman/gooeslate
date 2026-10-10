@@ -147,7 +147,11 @@ func smokeTest() error {
 }
 func (a *appState) runUIProbe() {
 	directory := testDirectory()
-	os.MkdirAll(directory, 0700)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		a.post(func() { a.testExitCode = 1; a.quit() })
+		return
+	}
 	time.Sleep(1200 * time.Millisecond)
 	a.post(func() {
 		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
@@ -165,29 +169,141 @@ func (a *appState) runUIProbe() {
 			i = 2
 		}
 	}
-	if !ok {
-		os.WriteFile(filepath.Join(directory, "ui-smoke-test.json"), []byte("{\"settings_and_result_bridge\":false}"), 0600)
-		os.Exit(1)
+	bridgeOK := ok
+	if bridgeOK {
+		a.post(func() {
+			img := image.NewRGBA(image.Rect(0, 0, 320, 180))
+			draw.Draw(img, img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
+			a.data = resultData{Mode: "image", Image: "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='320'%20height='180'%3E%3Crect%20width='320'%20height='180'%20fill='white'/%3E%3C/svg%3E", Width: 320, Height: 180, OriginalText: "UI smoke fixture", Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, DictionaryEnabled: true, Theme: "dark", Language: "简体中文"}
+			a.pushResult()
+			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='image'&&r.width===320&&document.getElementById('title').textContent==='原图翻译'&&document.getElementById('app').dataset.view==='image'))")
+		})
+		select {
+		case passed := <-a.uiProbe:
+			ok = passed
+		case <-time.After(8 * time.Second):
+			ok = false
+		}
 	}
-	a.post(func() {
-		img := image.NewRGBA(image.Rect(0, 0, 320, 180))
-		draw.Draw(img, img.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
-		a.data = resultData{Mode: "image", Image: "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='320'%20height='180'%3E%3Crect%20width='320'%20height='180'%20fill='white'/%3E%3C/svg%3E", Width: 320, Height: 180, OriginalText: "UI smoke fixture", Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, DictionaryEnabled: true, Theme: "dark", Language: "简体中文"}
-		a.pushResult()
-		a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='image'&&r.width===320&&document.getElementById('title').textContent==='原图翻译'&&document.getElementById('app').dataset.view==='image'))")
-	})
-	select {
-	case passed := <-a.uiProbe:
-		ok = ok && passed
-	case <-time.After(8 * time.Second):
+	report := map[string]any{"settings_and_result_bridge": bridgeOK, "native_webview_html_loaded": bridgeOK, "secret_fields_not_exposed": bridgeOK, "image_mode_push": ok, "desktop_capture_performed": false, "personal_settings_written": false}
+	if ok && os.Args[1] == "--render-smoke-test" {
+		if err := a.runRenderProbe(directory); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			ok = false
+		}
+		report["visible_window_pixels"] = ok
+	}
+	report["passed"] = ok
+	raw, _ := json.MarshalIndent(report, "", "  ")
+	if err := os.WriteFile(filepath.Join(directory, "ui-smoke-test.json"), raw, 0600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		ok = false
 	}
-	report := map[string]any{"settings_and_result_bridge": ok, "native_webview_html_loaded": ok, "secret_fields_not_exposed": ok, "image_mode_push": ok, "desktop_capture_performed": false, "personal_settings_written": false}
-	raw, _ := json.MarshalIndent(report, "", "  ")
-	os.WriteFile(filepath.Join(directory, "ui-smoke-test.json"), raw, 0600)
 	fmt.Println(string(raw))
-	if !ok {
-		os.Exit(1)
+	a.post(func() {
+		if !ok {
+			a.testExitCode = 1
+		}
+		a.quit()
+	})
+}
+
+func (a *appState) runRenderProbe(directory string) (err error) {
+	report := map[string]any{"desktop_capture_performed": false, "personal_settings_written": false}
+	defer func() {
+		report["passed"] = err == nil
+		if err != nil {
+			report["error"] = err.Error()
+		}
+		raw, _ := json.MarshalIndent(report, "", "  ")
+		if writeErr := os.WriteFile(filepath.Join(directory, "render-smoke-test.json"), raw, 0600); writeErr != nil && err == nil {
+			err = writeErr
+		}
+		fmt.Println(string(raw))
+	}()
+	for _, phase := range []string{"initial", "restore", "minimized", "maximized", "normal"} {
+		if phase == "restore" || phase == "minimized" {
+			hidden := make(chan error, 1)
+			a.post(func() {
+				command := uintptr(0)
+				if phase == "minimized" {
+					command = 6
+				}
+				for _, w := range []*webWindow{a.settings, a.result} {
+					call(user, "ShowWindow", w.hwnd, command)
+					visible, err := controllerVisible(w)
+					if err != nil || visible {
+						hidden <- fmt.Errorf("%s 收起后控制器仍然可见", w.kind)
+						return
+					}
+				}
+				hidden <- nil
+			})
+			select {
+			case err := <-hidden:
+				if err != nil {
+					return err
+				}
+			case <-time.After(8 * time.Second):
+				return fmt.Errorf("%s 收起验证超时", phase)
+			}
+			report[phase+"_controllers_hidden"] = true
+			time.Sleep(100 * time.Millisecond)
+		}
+		a.post(func() {
+			switch phase {
+			case "restore":
+				// The screenshot controller restores its owner with raw ShowWindow.
+				call(user, "ShowWindow", a.settings.hwnd, 5)
+				call(user, "ShowWindow", a.result.hwnd, 5)
+			case "maximized":
+				call(user, "ShowWindow", a.settings.hwnd, 3)
+				call(user, "ShowWindow", a.result.hwnd, 3)
+			case "normal":
+				call(user, "ShowWindow", a.settings.hwnd, 9)
+				call(user, "ShowWindow", a.result.hwnd, 9)
+			}
+			if phase == "initial" || phase == "minimized" {
+				a.showSettings("")
+				a.showResult()
+			}
+		})
+		time.Sleep(500 * time.Millisecond)
+		completed := make(chan error, 2)
+		a.post(func() {
+			for _, w := range []*webWindow{a.settings, a.result} {
+				visible, err := controllerVisible(w)
+				bounds, boundsErr := controllerBounds(w)
+				report[phase+"_"+w.kind+"_controller"] = map[string]any{"visible": visible, "width": bounds.R - bounds.L, "height": bounds.B - bounds.T, "navigation_ok": w.navigationOK}
+				fmt.Printf("%s %s: visible=%v bounds=%dx%d navigation=%v\n", phase, w.kind, visible, bounds.R-bounds.L, bounds.B-bounds.T, w.navigationOK)
+				if err != nil || boundsErr != nil || !visible || bounds.R <= bounds.L || bounds.B <= bounds.T {
+					completed <- fmt.Errorf("%s 控制器不可见或尺寸无效", w.kind)
+					continue
+				}
+				if !w.navigationOK {
+					completed <- fmt.Errorf("%s 页面导航失败：%d", w.kind, w.navigationError)
+					continue
+				}
+				if call(user, "IsWindowVisible", w.hwnd) == 0 {
+					completed <- fmt.Errorf("%s 窗口未显示", w.kind)
+					continue
+				}
+				captureWebView(w, filepath.Join(directory, phase+"-"+w.kind+".png"), func(err error) {
+					completed <- err
+				})
+			}
+		})
+		for i := 0; i < 2; i++ {
+			select {
+			case err := <-completed:
+				if err != nil {
+					return fmt.Errorf("%s 渲染验证：%w", phase, err)
+				}
+			case <-time.After(12 * time.Second):
+				return fmt.Errorf("%s 渲染验证超时", phase)
+			}
+		}
+		report[phase+"_settings_and_result_pixels"] = true
 	}
-	a.post(func() { a.quit() })
+	return nil
 }

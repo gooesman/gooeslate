@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -33,10 +33,12 @@ const trayMessage = 0x8002
 var uiFiles embed.FS
 
 type webWindow struct {
-	hwnd    uintptr
-	browser *edge.Chromium
-	kind    string
-	ready   bool
+	hwnd            uintptr
+	browser         *edge.Chromium
+	kind            string
+	ready           bool
+	navigationOK    bool
+	navigationError int32
 }
 type resultData struct {
 	Image             string               `json:"image,omitempty"`
@@ -86,6 +88,7 @@ type appState struct {
 	pinned                  bool
 	exiting                 bool
 	testMode                bool
+	testExitCode            int
 	uiProbe                 chan bool
 	captureResultWasVisible bool
 }
@@ -93,19 +96,25 @@ type appState struct {
 var app *appState
 
 func main() {
+	if code := run(); code != 0 {
+		os.Exit(code)
+	}
+}
+
+func run() int {
 	runtime.LockOSThread()
 	if len(os.Args) > 1 && os.Args[1] == "--configure-stdin" {
 		configureStdin()
-		return
+		return 0
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "--smoke-test" || os.Args[1] == "--live-test") {
 		if e := smokeTest(); e != nil {
 			fmt.Fprintln(os.Stderr, e)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
-	uiTest := len(os.Args) > 1 && os.Args[1] == "--ui-smoke-test"
+	uiTest := len(os.Args) > 1 && (os.Args[1] == "--ui-smoke-test" || os.Args[1] == "--render-smoke-test")
 	call(user, "SetProcessDpiAwarenessContext", ^uintptr(3))
 	ole32 := syscall.NewLazyDLL("ole32.dll")
 	co := call(ole32, "CoInitializeEx", 0, 2)
@@ -130,17 +139,18 @@ func main() {
 	}
 	if err := register("GooesTranslateWebV2", syscall.NewCallback(webProcedure), 32512); err != nil {
 		fatal(err)
-		return
+		return 1
 	}
 	app.settings, e = app.newWebWindow("settings", "gooestranslate · 设置", 1080, 760)
 	if e != nil {
 		fatal(e)
-		return
+		return 1
 	}
 	app.result, e = app.newWebWindow("result", "gooestranslate · 识别与翻译", 840, 700)
 	if e != nil {
 		fatal(e)
-		return
+		app.quit()
+		return 1
 	}
 	app.capture = NewCaptureController(app.settings.hwnd, func(img *image.RGBA, mode string) { app.receiveImage(img, mode) }, func() {
 		if app.captureResultWasVisible {
@@ -169,6 +179,7 @@ func main() {
 		call(user, "TranslateMessage", uintptr(unsafe.Pointer(&m)))
 		call(user, "DispatchMessageW", uintptr(unsafe.Pointer(&m)))
 	}
+	return app.testExitCode
 }
 func configureStdin() {
 	c := engine.DefaultConfig()
@@ -227,6 +238,13 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	w.browser = edge.NewChromium()
 	w.browser.DataPath = filepath.Join(filepath.Dir(configFile()), "WebView")
 	w.browser.SetGlobalPermission(edge.CoreWebView2PermissionStateDeny)
+	w.browser.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		methods := *(**[5]uintptr)(unsafe.Pointer(args))
+		var success, status int32
+		syscall.SyscallN(methods[3], uintptr(unsafe.Pointer(args)), uintptr(unsafe.Pointer(&success)))
+		syscall.SyscallN(methods[4], uintptr(unsafe.Pointer(args)), uintptr(unsafe.Pointer(&status)))
+		w.navigationOK, w.navigationError = success != 0, status
+	}
 	// Leave the WebView COM callback before actions that may open native dialogs.
 	w.browser.MessageCallback = func(raw string) {
 		a.queue <- func() { a.rpc(w, raw) }
@@ -236,17 +254,20 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 		return nil, fmt.Errorf("界面无法启动，请安装 Microsoft Edge WebView2 Runtime")
 	}
 	w.ready = true
+	w.browser.Hide()
 	if s, e := w.browser.GetSettings(); e == nil {
 		s.PutAreDefaultContextMenusEnabled(false)
 		s.PutAreDevToolsEnabled(false)
 		s.PutIsStatusBarEnabled(false)
 	}
-	w.browser.Init(bridgeScript)
 	html, e := uiFiles.ReadFile("ui/" + kind + ".html")
 	if e != nil {
 		return nil, e
 	}
-	w.browser.NavigateToString(string(html))
+	// The bridge must exist before page scripts run. Asynchronous Init followed
+	// immediately by NavigateToString can race registration of the script.
+	document := strings.Replace(string(html), "<head>", "<head><script>"+bridgeScript+"</script>", 1)
+	w.browser.NavigateToString(document)
 	w.browser.Resize()
 	return w, nil
 }
@@ -262,6 +283,8 @@ func (a *appState) showSettings(page string) {
 		return
 	}
 	call(user, "ShowWindow", a.settings.hwnd, 9)
+	a.settings.syncVisibility()
+	a.settings.browser.Focus()
 	call(user, "SetForegroundWindow", a.settings.hwnd)
 	if page != "" {
 		a.settings.browser.Eval("window.openSettingsPane&&window.openSettingsPane(" + jsonString(page) + ")")
@@ -272,6 +295,8 @@ func (a *appState) showResult() {
 		return
 	}
 	call(user, "ShowWindow", a.result.hwnd, 9)
+	a.result.syncVisibility()
+	a.result.browser.Focus()
 	call(user, "SetWindowPos", a.result.hwnd, ^uintptr(0), 0, 0, 0, 0, 0x43)
 	call(user, "SetForegroundWindow", a.result.hwnd)
 	if !a.pinned {
@@ -533,6 +558,15 @@ func (a *appState) quit() {
 	}
 	if a.tray {
 		a.trayIcon(2)
+	}
+	// Close both WebView controllers before destroying their parent windows.
+	for _, w := range a.windows {
+		if w.ready && w.browser.GetController() != nil {
+			controller := w.browser.GetController()
+			w.ready = false
+			methods := *(**[26]uintptr)(unsafe.Pointer(controller))
+			syscall.SyscallN(methods[24], uintptr(unsafe.Pointer(controller)))
+		}
 	}
 	if a.result != nil {
 		call(user, "DestroyWindow", a.result.hwnd)
