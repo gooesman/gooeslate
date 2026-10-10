@@ -3,11 +3,66 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type vocabularyGuardTransport func(*http.Request) (*http.Response, error)
+
+func (transport vocabularyGuardTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return transport(r)
+}
+
+func TestVocabularyWebsiteIsRejectedBeforeSendingAuthorization(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: vocabularyGuardTransport(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("no website request expected")
+	})}
+	for _, endpoint := range []string{"https://my.eudic.net/OpenAPI/Authorization", "https://MY.EUDIC.NET./OpenAPI/Authorization", "https://dict.eudic.net/account/login", "https://www.eudic.net"} {
+		cfg := DefaultConfig()
+		cfg.Vocabulary.BaseURL = endpoint
+		cfg.Vocabulary.APIKey = "TEST-GUARD-TOKEN"
+		if err := ValidateServiceConfig(cfg); err == nil || !strings.Contains(err.Error(), "网页地址") {
+			t.Fatal("saving a website as API base must explain the mistake", err)
+		}
+		_, err := ListVocabulary(context.Background(), client, cfg.Vocabulary)
+		if err == nil || !strings.Contains(err.Error(), DefaultVocabularyBaseURL) {
+			t.Fatal("website request must point to correct API base", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("authorization must not be sent to a known webpage endpoint")
+	}
+	for _, endpoint := range []string{DefaultVocabularyBaseURL, "http://localhost:18080/eudic/v1"} {
+		if err := ValidateVocabularyBaseURL(endpoint); err != nil {
+			t.Fatal("official and custom API bases must remain supported", err)
+		}
+	}
+}
+
+func TestVocabularyHTTPStatusExplainsAuthorizationAndAddress(t *testing.T) {
+	for _, item := range []struct {
+		code        int
+		explanation string
+	}{{401, "授权"}, {400, "生词本语言和 ID"}, {404, "API 基础地址"}, {403, "授权与连接配置"}} {
+		t.Run(item.explanation, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(item.code)
+				w.Write([]byte("TEST-TOKEN PRIVATE ACCOUNT PAYLOAD"))
+			}))
+			defer server.Close()
+			cfg := VocabularyConfig{BaseURL: server.URL, Language: "en", APIKey: "TEST-TOKEN"}
+			_, err := ListVocabulary(context.Background(), server.Client(), cfg)
+			if err == nil || !strings.Contains(err.Error(), item.explanation) || strings.Contains(err.Error(), "模型") || strings.Contains(err.Error(), "TEST-TOKEN") || strings.Contains(err.Error(), "PRIVATE") {
+				t.Fatal("wrong vocabulary-specific error", err)
+			}
+		})
+	}
+}
 
 func TestVocabularyOfficialProtocolAndStringIDs(t *testing.T) {
 	calls := 0

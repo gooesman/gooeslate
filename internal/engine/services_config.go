@@ -162,7 +162,7 @@ func NormalizeConfig(c Config) Config {
 		c.Vocabulary.Provider = "eudic"
 	}
 	if c.Vocabulary.BaseURL == "" {
-		c.Vocabulary.BaseURL = "https://api.frdic.com/api/open/v1"
+		c.Vocabulary.BaseURL = DefaultVocabularyBaseURL
 	}
 	if c.Vocabulary.Language == "" {
 		c.Vocabulary.Language = "en"
@@ -371,7 +371,7 @@ func ValidateServiceConfig(c Config) error {
 	if c.Vocabulary.Provider != "eudic" {
 		return errors.New("生词本类型无效")
 	}
-	if err := ValidateURL(c.Vocabulary.BaseURL); err != nil {
+	if err := ValidateVocabularyBaseURL(c.Vocabulary.BaseURL); err != nil {
 		return fmt.Errorf("生词本地址：%w", err)
 	}
 	if c.Vocabulary.TimeoutMS < 1000 || c.Vocabulary.TimeoutMS > 600000 {

@@ -65,6 +65,11 @@ func loadConfig() (engine.Config, error) {
 	}
 	err = decryptConfigCredentials(&c)
 	c = engine.NormalizeConfig(c)
+	// v0.3.0 allowed the authorization website to be saved as an API base.
+	// Repair that known mistake while preserving the token and category ID.
+	if engine.IsVocabularyWebPageURL(c.Vocabulary.BaseURL) {
+		c.Vocabulary.BaseURL = engine.DefaultVocabularyBaseURL
+	}
 	return c, err
 }
 func saveConfig(c engine.Config) error {

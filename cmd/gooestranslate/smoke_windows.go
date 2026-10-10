@@ -154,7 +154,7 @@ func (a *appState) runUIProbe() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	a.post(func() {
-		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
+		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
 		a.result.browser.Eval("getResult().then(r=>uiProbe(!!window.__uiReady&&typeof window.setResult==='function'&&typeof window.setDictionary==='function'))")
 	})
 	ok := true
@@ -330,6 +330,20 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 			}
 		case <-time.After(8 * time.Second):
 			return fmt.Errorf("%s 服务页切换超时", pane)
+		}
+		if pane == "vocabulary" {
+			a.post(func() {
+				a.settings.browser.Eval("window.openEudicAuthorization().then(r=>uiProbe(r.ok&&document.getElementById('vocabularyCategoryID').type==='text'&&document.getElementById('vocabularyCategoryID').value==='0'&&document.getElementById('vocabularyUrl').value===" + jsonString(engine.DefaultVocabularyBaseURL) + "))")
+			})
+			select {
+			case passed := <-a.uiProbe:
+				if !passed {
+					return fmt.Errorf("欧路授权入口或生词本 ID 控件验证失败")
+				}
+			case <-time.After(8 * time.Second):
+				return fmt.Errorf("欧路配置控件验证超时")
+			}
+			report["vocabulary_authorization_and_id_controls"] = true
 		}
 		time.Sleep(400 * time.Millisecond)
 		completed := make(chan error, 1)

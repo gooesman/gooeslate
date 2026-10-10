@@ -19,6 +19,12 @@ import (
 
 const maxResponse = 16 << 20
 
+type httpStatusError struct{ StatusCode int }
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("服务返回 HTTP %d，请检查接口、密钥和模型", e.StatusCode)
+}
+
 func HTTPClient() *http.Client {
 	// Request contexts enforce the configured deadline. A global client timeout
 	// would silently cap longer service settings at the former 90-second limit.
@@ -46,7 +52,7 @@ func response(client *http.Client, req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("服务返回 HTTP %d，请检查接口、密钥和模型", resp.StatusCode)
+		return nil, &httpStatusError{StatusCode: resp.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {

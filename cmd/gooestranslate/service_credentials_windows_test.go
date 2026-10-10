@@ -9,6 +9,23 @@ import (
 	"github.com/gooesman/gooestranslate/internal/engine"
 )
 
+func TestLegacyVocabularyWebsiteIsRepairedWithoutLosingAuthorization(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	cfg := engine.DefaultConfig()
+	cfg.Vocabulary.Enabled = true
+	cfg.Vocabulary.BaseURL = "https://my.eudic.net/OpenAPI/Authorization"
+	cfg.Vocabulary.APIKey = "NIS TEST-LEGACY-VOCABULARY-TOKEN"
+	cfg.Vocabulary.CategoryID = "123456789012345678"
+	// Reproduce the settings v0.3.0 allowed, including DPAPI encrypted token.
+	if err := saveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadConfig()
+	if err != nil || loaded.Vocabulary.BaseURL != engine.DefaultVocabularyBaseURL || loaded.Vocabulary.APIKey != cfg.Vocabulary.APIKey || loaded.Vocabulary.CategoryID != cfg.Vocabulary.CategoryID || !loaded.Vocabulary.Enabled {
+		t.Fatal("repair must only change the mistaken API address", err)
+	}
+}
+
 func TestServiceSettingsPreserveCredentialsByIDWithoutMutatingCurrent(t *testing.T) {
 	current := engine.DefaultConfig()
 	current.TranslationServices[0].Model = "old-model"

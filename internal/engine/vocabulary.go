@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"net/http"
 	"net/url"
@@ -14,6 +15,31 @@ import (
 	"unicode"
 	"unicode/utf8"
 )
+
+const DefaultVocabularyBaseURL = "https://api.frdic.com/api/open/v1"
+
+// The authorization website provides a token; it does not serve API requests.
+func IsVocabularyWebPageURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return false
+	}
+	switch strings.TrimRight(strings.ToLower(u.Hostname()), ".") {
+	case "my.eudic.net", "dict.eudic.net", "www.eudic.net", "eudic.net":
+		return true
+	}
+	return false
+}
+
+func ValidateVocabularyBaseURL(raw string) error {
+	if err := ValidateURL(raw); err != nil {
+		return err
+	}
+	if IsVocabularyWebPageURL(raw) {
+		return errors.New("这是欧路网页地址，请在“获取欧路授权”页面复制 API 授权信息；API 基础地址请使用 " + DefaultVocabularyBaseURL)
+	}
+	return nil
+}
 
 // VocabularyCategory IDs must remain strings: EuDic IDs exceed JavaScript's
 // safe integer range. See https://my.eudic.net/OpenAPI/doc_api_study.
@@ -62,9 +88,9 @@ func vocabularyRequest(ctx context.Context, client *http.Client, cfg VocabularyC
 	}
 	base := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	if base == "" {
-		base = "https://api.frdic.com/api/open/v1"
+		base = DefaultVocabularyBaseURL
 	}
-	if err := ValidateURL(base); err != nil {
+	if err := ValidateVocabularyBaseURL(base); err != nil {
 		return nil, err
 	}
 	u, _ := url.Parse(base)
@@ -98,7 +124,21 @@ func vocabularyRequest(ctx context.Context, client *http.Client, cfg VocabularyC
 	if client == nil {
 		client = HTTPClient()
 	}
-	return response(client, req)
+	raw, err := response(client, req)
+	var status *httpStatusError
+	if errors.As(err, &status) {
+		switch status.StatusCode {
+		case http.StatusUnauthorized:
+			err = errors.New("欧路授权无效或已过期（HTTP 401），请重新获取 API 授权信息")
+		case http.StatusBadRequest:
+			err = errors.New("欧路生词本参数无效（HTTP 400），请检查生词本语言和 ID")
+		case http.StatusNotFound:
+			err = errors.New("欧路生词本接口返回 HTTP 404，请检查高级连接设置中的 API 基础地址；授权网页不能作为接口地址")
+		default:
+			err = fmt.Errorf("欧路生词本接口返回 HTTP %d，请检查授权与连接配置", status.StatusCode)
+		}
+	}
+	return raw, err
 }
 
 func ListVocabulary(ctx context.Context, client *http.Client, cfg VocabularyConfig) ([]VocabularyCategory, error) {

@@ -83,6 +83,17 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 			return nil, fmt.Errorf("请在设置窗口修改服务")
 		}
 		return a.saveSettings(arg(0))
+	case "openEudicAuthorization":
+		if w.kind != "settings" {
+			return nil, fmt.Errorf("请从生词本设置打开授权页面")
+		}
+		if a.testMode {
+			return apiResult{true, "界面自测未打开浏览器"}, nil
+		}
+		if err := openEudicAuthorization(w.hwnd); err != nil {
+			return nil, err
+		}
+		return apiResult{true, "已在默认浏览器打开欧路授权页面"}, nil
 	case "setShortcutRecording":
 		if w.kind != "settings" {
 			return nil, fmt.Errorf("请在设置中录制快捷键")
