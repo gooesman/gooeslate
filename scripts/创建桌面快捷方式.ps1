@@ -5,7 +5,10 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'gooestranslate.exe') -PathT
     $applicationDirectory = $PSScriptRoot
 }
 $applicationExecutable = Join-Path $applicationDirectory 'gooestranslate.exe'
-$applicationIcon = Join-Path $applicationDirectory 'gooestranslate.ico'
+$applicationIcon = Join-Path $applicationDirectory 'gooestranslate-goose.ico'
+if (!(Test-Path -LiteralPath $applicationIcon -PathType Leaf)) {
+    $applicationIcon = Join-Path $applicationDirectory 'gooestranslate.ico'
+}
 if (!(Test-Path -LiteralPath $applicationExecutable -PathType Leaf)) {
     throw '找不到 gooestranslate.exe，请在解压后的程序目录运行此脚本。'
 }
@@ -28,4 +31,17 @@ if (Test-Path -LiteralPath $applicationIcon -PathType Leaf) {
     $shortcut.IconLocation = $applicationExecutable + ',0'
 }
 $shortcut.Save()
+if (!('GooesTranslateShortcutNotify' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class GooesTranslateShortcutNotify {
+    [DllImport("shell32.dll", ExactSpelling=true, CharSet=CharSet.Unicode)]
+    public static extern void SHChangeNotify(int change, uint flags, string path, IntPtr unused);
+}
+"@
+}
+foreach ($changedPath in @($applicationIcon,$applicationExecutable,$shortcutPath)) {
+    [GooesTranslateShortcutNotify]::SHChangeNotify(0x2000,5,$changedPath,[IntPtr]::Zero)
+}
 Write-Output ('已创建桌面快捷方式：' + $shortcutPath)

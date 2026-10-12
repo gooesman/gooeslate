@@ -24,12 +24,12 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.8"
+const version = "0.3.9"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
 
-//go:embed ui/*.html
+//go:embed ui/*.html ui/app-icon.png ui/app-icon.ico
 var uiFiles embed.FS
 
 type webWindow struct {
@@ -345,6 +345,11 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	// The bridge must exist before page scripts run. Asynchronous Init followed
 	// immediately by NavigateToString can race registration of the script.
 	document := strings.Replace(string(html), "<head>", "<head><script>window.__nativeDragRegions="+jsonString(w.dragRegions)+";"+bridgeScript+"</script>", 1)
+	iconPNG, e := uiFiles.ReadFile("ui/app-icon.png")
+	if e != nil {
+		return nil, e
+	}
+	document = strings.ReplaceAll(document, `src="app-icon.png"`, `src="data:image/png;base64,`+base64.StdEncoding.EncodeToString(iconPNG)+`"`)
 	w.browser.NavigateToString(document)
 	w.browser.Resize()
 	return w, nil
