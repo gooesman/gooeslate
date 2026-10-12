@@ -57,7 +57,7 @@ func (a *appState) trayMenu() {
 	for _, v := range []struct {
 		id    int
 		label string
-	}{{1, "截图工具"}, {2, "截图识别"}, {3, "截图翻译"}, {4, "原图翻译"}, {7, "划词翻译设置"}, {5, "打开设置"}, {6, "退出"}} {
+	}{{1, "截图工具"}, {2, "截图识别"}, {3, "截图翻译"}, {4, "原图翻译"}, {8, "文本翻译"}, {7, "划词翻译设置"}, {5, "打开设置"}, {6, "退出"}} {
 		call(user, "AppendMenuW", menu, 0, u(v.id), uintptr(unsafe.Pointer(str(v.label))))
 	}
 	var p point
@@ -72,6 +72,8 @@ func (a *appState) trayMenu() {
 		a.showSettings("")
 	case 6:
 		a.quit()
+	case 8:
+		a.showTextInput()
 	case 7:
 		a.showSettings("selection")
 	}

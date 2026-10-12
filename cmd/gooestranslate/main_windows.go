@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.9"
+const version = "0.3.10"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -42,6 +42,9 @@ type webWindow struct {
 	dragRegions     bool
 }
 type resultData struct {
+	DocumentID           uint64               `json:"document_id"`
+	TextRequestID        int                  `json:"text_request_id"`
+	ManualInput          bool                 `json:"manual_input"`
 	Image                string               `json:"image,omitempty"`
 	Width                int                  `json:"width"`
 	Height               int                  `json:"height"`
@@ -355,7 +358,7 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	return w, nil
 }
 
-const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','exportConfiguration','chooseConfigurationImport','applyConfigurationImport','cancelConfigurationImport','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openEudicAuthorization','testService','listModels']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
+const bridgeScript = `(()=>{const pending=new Map();let seq=0;window.__resolve=(id,ok,value)=>{const p=pending.get(id);if(!p)return;pending.delete(id);ok?p.resolve(value):p.reject(new Error(value));};for(const method of ['getState','saveSettings','exportConfiguration','chooseConfigurationImport','applyConfigurationImport','cancelConfigurationImport','startCapture','chooseImage','hideWindow','quitApp','getResult','doResult','uiProbe','setShortcutRecording','vocabularyLists','openTextTranslation','openEudicAuthorization','testService','listModels']){window[method]=(...args)=>new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});window.chrome.webview.postMessage(JSON.stringify({id,method,args}));});}})();`
 
 func (a *appState) post(f func()) {
 	a.queue <- f
@@ -410,7 +413,7 @@ func (a *appState) receiveImage(img *image.RGBA, mode string) {
 	a.snapshotID++
 	snapshot := a.snapshotID
 	cfg := a.cfg
-	a.data = resultData{Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), Mode: mode, Language: cfg.Language, LanguageSetting: cfg.Language, VocabularyEnabled: cfg.Vocabulary.Enabled, CoordinatesSupported: engine.ActiveOCR(cfg).Coordinates, ClipboardError: a.captureClipboardError, Theme: cfg.Theme, DictionaryEnabled: cfg.Dictionary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Status: "正在识别…"}
+	a.data = resultData{DocumentID: snapshot, Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), Mode: mode, Language: cfg.Language, LanguageSetting: cfg.Language, VocabularyEnabled: cfg.Vocabulary.Enabled, CoordinatesSupported: engine.ActiveOCR(cfg).Coordinates, ClipboardError: a.captureClipboardError, Theme: cfg.Theme, DictionaryEnabled: cfg.Dictionary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Status: "正在识别…"}
 	a.captureClipboardError = ""
 	a.lastImageSent = ""
 	a.lines = nil
@@ -478,6 +481,11 @@ func (a *appState) recognize(mode string) {
 			a.data.SourceLanguage = engine.DetectSourceLanguage(a.data.OriginalText)
 			a.data.Language = engine.ResolveTargetLanguage(a.data.LanguageSetting, a.data.OriginalText)
 			a.data.Status = fmt.Sprintf("识别完成 · %d 个文字块", len(blocks))
+			if len(a.lines) == 0 {
+				a.data.Status = "未识别到文字，可以直接输入原文翻译"
+				a.pushResult()
+				return
+			}
 			if cfg.AutoCopyOCR && a.data.OriginalText != "" {
 				clipboard(a.result.hwnd, a.data.OriginalText)
 			}

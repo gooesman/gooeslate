@@ -86,6 +86,7 @@ func (a *appState) receiveSelectedText(text string) {
 		return
 	}
 	a.resetSelectionResult()
+	data.DocumentID = a.snapshotID
 	a.data, a.lines = data, lines
 	a.showResult()
 	a.pushResult()
@@ -95,7 +96,7 @@ func (a *appState) receiveSelectedText(text string) {
 func (a *appState) showSelectionError(err error) {
 	a.resetSelectionResult()
 	a.lines = nil
-	a.data = resultData{Mode: "selection", Theme: a.cfg.Theme, LanguageSetting: a.cfg.Language, DictionaryEnabled: a.cfg.Dictionary.Enabled, VocabularyEnabled: a.cfg.Vocabulary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Error: err.Error(), Status: err.Error()}
+	a.data = resultData{DocumentID: a.snapshotID, Mode: "selection", Theme: a.cfg.Theme, LanguageSetting: a.cfg.Language, DictionaryEnabled: a.cfg.Dictionary.Enabled, VocabularyEnabled: a.cfg.Vocabulary.Enabled, Blocks: []engine.Block{}, Lines: []resultLine{}, Translations: []engine.Translation{}, Error: err.Error(), Status: err.Error()}
 	a.showResult()
 	a.pushResult()
 }

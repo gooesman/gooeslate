@@ -160,6 +160,9 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 		var mode string
 		json.Unmarshal(arg(0), &mode)
 		return a.startCapture(mode), nil
+	case "openTextTranslation":
+		a.showTextInput()
+		return true, nil
 	case "chooseImage":
 		if a.testMode {
 			return false, nil
@@ -222,6 +225,13 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 			if a.data.Mode != "selection" && (p.Mode == "image" || p.Mode == "translate") {
 				a.data.Mode = p.Mode
 			}
+			a.translate(p.Language)
+		case "translate_text":
+			if err := a.prepareManualText(p.Text, p.Language, p.RequestID); err != nil {
+				return nil, err
+			}
+			a.showResult()
+			a.pushResult()
 			a.translate(p.Language)
 		case "cancel":
 			a.stopRequest(true)

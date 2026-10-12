@@ -22,6 +22,18 @@ const (
 	frameHitBottomRight = uintptr(17)
 )
 
+// Keep this surface in sync with result.html --bg in both light/dark themes.
+func resultSurfaceColor(dark bool) uintptr {
+	if dark {
+		return rgb(23, 25, 29)
+	}
+	return rgb(247, 248, 250)
+}
+
+func isCustomResultFrame(style uintptr) bool {
+	return style&0x80000000 != 0 && style&0x00040000 != 0 && style&0x00c00000 == 0
+}
+
 func resultResizeInset(dpi int) int32 {
 	if dpi <= 0 {
 		dpi = 96
@@ -29,9 +41,10 @@ func resultResizeInset(dpi int) int32 {
 	return int32(max(4, (6*dpi+48)/96))
 }
 
-// A small real non-client border keeps all eight resize handles reachable.
+// An invisible non-client band keeps all eight resize handles reachable.
 // The WebView child windows do not cover these handles or interfere with
-// ordinary selection and image mouse events.
+// ordinary selection and image mouse events. It uses the exact HTML surface
+// color, without a separate DWM outline, so it is not another visible frame.
 func resultClientBounds(proposed, work rect, maximized bool, inset int32) rect {
 	if maximized {
 		return rect{max(proposed.L, work.L), max(proposed.T, work.T), min(proposed.R, work.R), min(proposed.B, work.B)}
@@ -115,10 +128,7 @@ func handleResultFrame(w *webWindow, msg uint32, wp, lp uintptr, theme string) (
 			call(user, "GetWindowRect", hwnd, uintptr(unsafe.Pointer(&bounds)))
 			width, height := bounds.R-bounds.L, bounds.B-bounds.T
 			inset := resultResizeInset(int(call(user, "GetDpiForWindow", hwnd)))
-			shade := rgb(247, 248, 250)
-			if appUsesDarkAppearance(theme) {
-				shade = rgb(23, 25, 29)
-			}
+			shade := resultSurfaceColor(appUsesDarkAppearance(theme))
 			for _, edge := range []rect{{0, 0, width, inset}, {0, height - inset, width, height}, {0, inset, inset, height - inset}, {width - inset, inset, width, height - inset}} {
 				fill(dc, edge, shade)
 			}
@@ -269,7 +279,12 @@ func resultFrameSnapshot(w *webWindow) (map[string]any, error) {
 			return nil, fmt.Errorf("翻译窗口边缘无法缩放")
 		}
 	}
-	return map[string]any{"caption_removed": true, "dpi": dpi, "resize_inset": inset, "maximized": maximized, "client": actual, "window": outer, "work_area": work, "native_drag_regions": w.dragRegions, "border_hit": borderHit}, nil
+	var border uint32
+	borderSupported := int32(call(appearanceDWM, "DwmGetWindowAttribute", w.hwnd, 34, uintptr(unsafe.Pointer(&border)), unsafe.Sizeof(border))) >= 0
+	if borderSupported && border != dwmColorNone {
+		return nil, fmt.Errorf("翻译窗口仍有额外的系统描边")
+	}
+	return map[string]any{"caption_removed": true, "dpi": dpi, "resize_inset": inset, "maximized": maximized, "client": actual, "window": outer, "work_area": work, "native_drag_regions": w.dragRegions, "border_hit": borderHit, "dwm_border_supported": borderSupported, "dwm_border_suppressed": borderSupported && border == dwmColorNone}, nil
 }
 
 // MINMAXINFO layout: reserved, ptMaxSize, ptMaxPosition, minTrack, maxTrack.

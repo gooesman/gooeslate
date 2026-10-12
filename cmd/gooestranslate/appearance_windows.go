@@ -8,6 +8,8 @@ import (
 var appearanceDWM = syscall.NewLazyDLL("dwmapi.dll")
 var appearanceRegistry = syscall.NewLazyDLL("advapi32.dll")
 
+const dwmColorNone = uint32(0xfffffffe)
+
 func appUsesDarkAppearance(theme string) bool {
 	switch theme {
 	case "dark":
@@ -37,6 +39,13 @@ func applyWindowAppearance(hwnd uintptr, theme string) {
 	if dark {
 		darkValue = 1
 		caption, foreground, border = uint32(rgb(17, 18, 20)), uint32(rgb(240, 241, 243)), uint32(rgb(48, 50, 56))
+	}
+	// Result windows already draw their own uniform surface. Windows 11's
+	// contrasting one-pixel outline would look like another nested frame.
+	style := call(user, "GetWindowLongPtrW", hwnd, ^uintptr(15))
+	if isCustomResultFrame(style) {
+		caption = uint32(resultSurfaceColor(dark))
+		border = dwmColorNone
 	}
 	attribute := func(id uint32, value *uint32) uintptr {
 		return call(appearanceDWM, "DwmSetWindowAttribute", hwnd, uintptr(id), uintptr(unsafe.Pointer(value)), unsafe.Sizeof(*value))

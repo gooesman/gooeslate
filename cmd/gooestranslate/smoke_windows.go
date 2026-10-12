@@ -154,7 +154,7 @@ func (a *appState) runUIProbe() {
 	}
 	time.Sleep(1200 * time.Millisecond)
 	a.post(func() {
-		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&typeof window.testService==='function'&&typeof window.listModels==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
+		a.settings.browser.Eval("getState().then(s=>uiProbe(!!window.__uiReady&&document.querySelectorAll('.nav button').length>=6&&typeof window.openEudicAuthorization==='function'&&typeof window.openTextTranslation==='function'&&typeof document.getElementById('openTextTranslation').onclick==='function'&&typeof window.testService==='function'&&typeof window.listModels==='function'&&!('api_key' in s.config)&&!('encrypted_key' in s.config)))")
 		a.result.browser.Eval("getResult().then(r=>uiProbe(!!window.__uiReady&&typeof window.setResult==='function'&&typeof window.setDictionary==='function'))")
 	})
 	ok := true
@@ -178,16 +178,34 @@ func (a *appState) runUIProbe() {
 				a.uiProbe <- false
 				return
 			}
+			a.snapshotID++
+			data.DocumentID = a.snapshotID
 			a.data, a.lines = data, lines
 			a.data.TranslatedText = "选择一个单词进行翻译。"
 			a.pushResult()
-			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='selection'&&!r.image&&r.lines.length===1&&document.getElementById('title').textContent==='划词翻译'&&document.getElementById('app').dataset.view==='text'&&document.getElementById('tabImage').style.display==='none'&&document.getElementById('export').style.display==='none'))")
+			a.result.browser.Eval("getResult().then(r=>uiProbe(r.mode==='selection'&&!r.image&&r.lines.length===1&&document.getElementById('title').textContent==='划词翻译'&&document.getElementById('original').tagName==='TEXTAREA'&&document.getElementById('original').value==='Select a word to translate.'&&document.getElementById('app').dataset.view==='text'&&document.getElementById('tabImage').style.display==='none'&&document.getElementById('export').style.display==='none'))")
 		})
 		select {
 		case selectionOK = <-a.uiProbe:
 		case <-time.After(8 * time.Second):
 		}
 		ok = selectionOK
+	}
+	manualOK := false
+	if bridgeOK && selectionOK {
+		a.post(func() {
+			if err := a.prepareManualText("Type a word or paragraph.", "auto", 17); err != nil {
+				a.uiProbe <- false
+				return
+			}
+			a.pushResult()
+			a.result.browser.Eval("getResult().then(r=>{const editor=document.getElementById('original');const valid=r.manual_input&&r.text_request_id===17&&r.document_id>0&&editor.value==='Type a word or paragraph.'&&document.getElementById('title').textContent==='文字翻译'&&document.getElementById('tabImage').style.display==='none';editor.value='Keep my newer input';editor.dispatchEvent(new Event('input',{bubbles:true}));window.setResult({document_id:r.document_id,busy:true,original_text:r.original_text,text_request_id:r.text_request_id});uiProbe(valid&&editor.value==='Keep my newer input'&&!document.getElementById('translate').disabled);})")
+		})
+		select {
+		case manualOK = <-a.uiProbe:
+		case <-time.After(8 * time.Second):
+		}
+		ok = ok && manualOK
 	}
 	if bridgeOK {
 		a.post(func() {
@@ -204,7 +222,8 @@ func (a *appState) runUIProbe() {
 			blocks := []engine.Block{{Text: "Hello world", Box: [4][2]float64{{20, 20}, {250, 20}, {250, 60}, {20, 60}}}, {Text: "Original image translation", Box: [4][2]float64{{20, 85}, {480, 85}, {480, 135}, {20, 135}}}}
 			a.img = img
 			a.lines = engine.GroupLines(blocks)
-			a.data = resultData{Mode: "image", Image: "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes()), Width: 640, Height: 180, OriginalText: engine.Text(blocks), TranslatedText: "你好，世界\n原图翻译", Blocks: blocks, Lines: []resultLine{}, Translations: []engine.Translation{{ID: 0, Text: "你好，世界"}, {ID: 1, Text: "原图翻译"}}, DictionaryEnabled: true, VocabularyEnabled: true, CoordinatesSupported: true, Theme: "dark", Language: "简体中文", LanguageSetting: "auto", SourceLanguage: "英语", Status: "翻译完成 · 测试图片"}
+			a.snapshotID++
+			a.data = resultData{DocumentID: a.snapshotID, Mode: "image", Image: "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes()), Width: 640, Height: 180, OriginalText: engine.Text(blocks), TranslatedText: "你好，世界\n原图翻译", Blocks: blocks, Lines: []resultLine{}, Translations: []engine.Translation{{ID: 0, Text: "你好，世界"}, {ID: 1, Text: "原图翻译"}}, DictionaryEnabled: true, VocabularyEnabled: true, CoordinatesSupported: true, Theme: "dark", Language: "简体中文", LanguageSetting: "auto", SourceLanguage: "英语", Status: "翻译完成 · 测试图片"}
 			for _, line := range a.lines {
 				a.data.Lines = append(a.data.Lines, resultLine{line.ID, line.Text, line.Bounds})
 			}
@@ -218,8 +237,8 @@ func (a *appState) runUIProbe() {
 			ok = false
 		}
 	}
-	ok = ok && selectionOK
-	report := map[string]any{"settings_and_result_bridge": bridgeOK, "native_webview_html_loaded": bridgeOK, "secret_fields_not_exposed": bridgeOK, "image_mode_push": ok, "selection_mode_push": selectionOK, "global_selection_hook_installed": false, "clipboard_read_or_written": false, "desktop_capture_performed": false, "personal_settings_written": false}
+	ok = ok && selectionOK && manualOK
+	report := map[string]any{"settings_and_result_bridge": bridgeOK, "native_webview_html_loaded": bridgeOK, "secret_fields_not_exposed": bridgeOK, "image_mode_push": ok, "selection_mode_push": selectionOK, "manual_text_editor_without_network": manualOK, "global_selection_hook_installed": false, "clipboard_read_or_written": false, "desktop_capture_performed": false, "personal_settings_written": false}
 	if ok && os.Args[1] == "--render-smoke-test" {
 		if err := a.runRenderProbe(directory); err != nil {
 			fmt.Fprintln(os.Stderr, err)
