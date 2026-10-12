@@ -26,14 +26,16 @@ func TestCaptureCachedPaintAndSelectionMove(t *testing.T) {
 	defer c.Close()
 	c.textFont, c.hintFont = font(14, false), font(12, false)
 	c.start, c.end, c.ready = image.Pt(10, 60), image.Pt(80, 100), true
-	c.paint(c.back.dc, snapshot.Bounds())
+	if err := c.paint(c.back.dc, snapshot.Bounds()); err != nil {
+		t.Fatal(err)
+	}
 	read := func() *image.RGBA {
 		call(gdi, "GdiFlush")
 		call(gdi, "SelectObject", c.back.dc, c.back.previous)
 		defer call(gdi, "SelectObject", c.back.dc, c.back.bitmap)
 		data := make([]byte, 240*180*4)
 		info := bitmapinfo{Header: bitmapheader{Size: 40, Width: 240, Height: -180, Planes: 1, BitCount: 32}}
-		if call(gdi, "GetDIBits", c.back.dc, c.back.bitmap, 0, 180, uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&info)), 0) == 0 {
+		if call(gdi, "GetDIBits", c.back.dc, c.back.bitmap, 0, 180, uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&info)), 0) != 180 {
 			t.Fatal("unable to read synthetic native bitmap")
 		}
 		return pixelsImage(data, 240, 180)
@@ -47,7 +49,9 @@ func TestCaptureCachedPaintAndSelectionMove(t *testing.T) {
 	}
 	old := c.dirty()
 	c.start, c.end = image.Pt(140, 80), image.Pt(210, 140)
-	c.paint(c.back.dc, old.Union(c.dirty()).Intersect(snapshot.Bounds()))
+	if err := c.paint(c.back.dc, old.Union(c.dirty()).Intersect(snapshot.Bounds())); err != nil {
+		t.Fatal(err)
+	}
 	painted = read()
 	if got := painted.RGBAAt(20, 80); got != (color.RGBA{110, 55, 22, 255}) {
 		t.Fatalf("previous selection must be restored on incremental repaint: %v", got)

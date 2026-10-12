@@ -48,13 +48,14 @@ func CaptureSmokeTest(outputDir string) error {
 		drawText(b.dc, "文字识别 / 翻译文字 / 原图翻译", rect{104, 181, 694, 224}, c.textFont, b.textColor, 4|0x20)
 		drawText(b.dc, "框选支持负坐标显示器，拖动时复用图像缓存。", rect{104, 234, 694, 268}, c.hintFont, b.textColor, 4|0x20)
 	}
-	c.paint(c.back.dc, snapshot.Bounds())
-	call(gdi, "GdiFlush")
+	if err := c.paint(c.back.dc, snapshot.Bounds()); err != nil {
+		return err
+	}
 	call(gdi, "SelectObject", c.back.dc, c.back.previous)
 	defer call(gdi, "SelectObject", c.back.dc, c.back.bitmap)
 	data := make([]byte, 800*480*4)
 	info := bitmapinfo{Header: bitmapheader{Size: 40, Width: 800, Height: -480, Planes: 1, BitCount: 32}}
-	if call(gdi, "GetDIBits", c.back.dc, c.back.bitmap, 0, 480, uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&info)), 0) == 0 {
+	if call(gdi, "GetDIBits", c.back.dc, c.back.bitmap, 0, 480, uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&info)), 0) != 480 {
 		return fmt.Errorf("截图缓存读取验证失败")
 	}
 	f, err := os.Create(filepath.Join(outputDir, "capture-toolbar.png"))

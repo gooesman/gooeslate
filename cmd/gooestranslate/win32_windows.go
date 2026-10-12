@@ -198,30 +198,24 @@ func desktop() (*image.RGBA, rect, error) {
 	y := int(int32(call(user, "GetSystemMetrics", 77)))
 	w := int(call(user, "GetSystemMetrics", 78))
 	h := int(call(user, "GetSystemMetrics", 79))
-	if w <= 0 || h <= 0 || int64(w)*int64(h) > 100000000 {
+	if _, err := capturePixelBytes(w, h); err != nil {
 		return nil, rect{}, fmt.Errorf("屏幕尺寸不支持")
 	}
+	// Synchronize our pending compositor changes after hiding the app. This is
+	// best effort: DwmFlush does not synchronize other applications' rendering.
+	if flush := appearanceDWM.NewProc("DwmFlush"); flush.Find() == nil {
+		flush.Call()
+	}
 	dc := call(user, "GetDC", 0)
+	if dc == 0 {
+		return nil, rect{}, fmt.Errorf("无法访问屏幕画布")
+	}
 	defer call(user, "ReleaseDC", 0, dc)
-	mem := call(gdi, "CreateCompatibleDC", dc)
-	defer call(gdi, "DeleteDC", mem)
-	bmp := call(gdi, "CreateCompatibleBitmap", dc, u(w), u(h))
-	if bmp == 0 {
-		return nil, rect{}, fmt.Errorf("无法创建截图")
+	img, err := captureDCImage(dc, x, y, w, h)
+	if err != nil {
+		return nil, rect{}, err
 	}
-	defer call(gdi, "DeleteObject", bmp)
-	old := call(gdi, "SelectObject", mem, bmp)
-	ok := call(gdi, "BitBlt", mem, 0, 0, u(w), u(h), dc, u(x), u(y), 0x40cc0020)
-	call(gdi, "SelectObject", mem, old)
-	if ok == 0 {
-		return nil, rect{}, fmt.Errorf("无法读取屏幕图像")
-	}
-	data := make([]byte, w*h*4)
-	info := bitmapinfo{Header: bitmapheader{Size: 40, Width: int32(w), Height: -int32(h), Planes: 1, BitCount: 32}}
-	if call(gdi, "GetDIBits", mem, bmp, 0, u(h), uintptr(unsafe.Pointer(&data[0])), uintptr(unsafe.Pointer(&info)), 0) == 0 {
-		return nil, rect{}, fmt.Errorf("无法读取截图像素")
-	}
-	return pixelsImage(data, w, h), rect{int32(x), int32(y), int32(x + w), int32(y + h)}, nil
+	return img, rect{int32(x), int32(y), int32(x + w), int32(y + h)}, nil
 }
 func clipboard(owner uintptr, s string) error {
 	if call(user, "OpenClipboard", owner) == 0 {

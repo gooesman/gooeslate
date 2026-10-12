@@ -31,6 +31,13 @@ func (b *captureBitmap) close() {
 // Each bitmap is uploaded once. Mouse motion repaints with BitBlt rather than
 // converting or resizing all virtual-desktop pixels on every mouse event.
 func newCaptureBitmap(width, height int, pixels []byte) (captureBitmap, error) {
+	length, err := capturePixelBytes(width, height)
+	if err != nil {
+		return captureBitmap{}, err
+	}
+	if len(pixels) != 0 && len(pixels) != length {
+		return captureBitmap{}, fmt.Errorf("截图缓存像素长度不正确")
+	}
 	b := captureBitmap{dc: call(gdi, "CreateCompatibleDC", 0)}
 	if b.dc == 0 {
 		return b, fmt.Errorf("无法创建截图缓存")
@@ -43,9 +50,17 @@ func newCaptureBitmap(width, height int, pixels []byte) (captureBitmap, error) {
 		return b, fmt.Errorf("无法创建截图画布")
 	}
 	b.previous = call(gdi, "SelectObject", b.dc, b.bitmap)
+	if b.previous == 0 || b.previous == ^uintptr(0) {
+		b.previous = 0
+		b.close()
+		return b, fmt.Errorf("无法准备截图画布")
+	}
+	buffer := unsafe.Slice((*byte)(bits), length)
 	if len(pixels) > 0 {
-		copy(unsafe.Slice((*byte)(bits), width*height*4), pixels)
+		copy(buffer, pixels)
 		runtime.KeepAlive(pixels)
+	} else {
+		clear(buffer)
 	}
 	return b, nil
 }
@@ -153,7 +168,7 @@ func (c *CaptureController) HandleTimer() {
 }
 
 func (c *CaptureController) prepare(snapshot *image.RGBA, bounds image.Rectangle) error {
-	if snapshot == nil || snapshot.Bounds().Empty() || snapshot.Bounds().Dx() != bounds.Dx() || snapshot.Bounds().Dy() != bounds.Dy() {
+	if !validCaptureSnapshot(snapshot) || snapshot.Bounds().Dx() != bounds.Dx() || snapshot.Bounds().Dy() != bounds.Dy() {
 		return fmt.Errorf("截图尺寸不正确")
 	}
 	c.snapshot, c.bounds = snapshot, bounds
@@ -178,7 +193,7 @@ func (c *CaptureController) prepare(snapshot *image.RGBA, bounds image.Rectangle
 		c.dim, err = newCaptureBitmap(w, h, dimmed)
 	}
 	if err == nil {
-		c.back, err = newCaptureBitmap(w, h, nil)
+		c.back, err = newCaptureBitmap(w, h, dimmed)
 	}
 	if err != nil {
 		c.original.close()
@@ -243,17 +258,34 @@ func (c *CaptureController) refresh(old image.Rectangle) {
 	call(user, "InvalidateRect", c.hwnd, uintptr(unsafe.Pointer(&wr)), 0)
 }
 
-func (c *CaptureController) paint(dc uintptr, invalid image.Rectangle) {
-	if c.snapshot == nil || c.back.dc == 0 {
-		return
+func (c *CaptureController) paint(dc uintptr, invalid image.Rectangle) (err error) {
+	if !validCaptureSnapshot(c.snapshot) || dc == 0 || c.back.dc == 0 || c.dim.dc == 0 || c.original.dc == 0 {
+		return fmt.Errorf("截图画布不可用，请重新截图")
+	}
+	invalid = invalid.Intersect(c.snapshot.Bounds())
+	if invalid.Empty() {
+		return nil
 	}
 	state := call(gdi, "SaveDC", c.back.dc)
-	defer call(gdi, "RestoreDC", c.back.dc, state)
-	call(gdi, "IntersectClipRect", c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Max.X), u(invalid.Max.Y))
-	call(gdi, "BitBlt", c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Dx()), u(invalid.Dy()), c.dim.dc, u(invalid.Min.X), u(invalid.Min.Y), 0x00cc0020)
+	if state == 0 {
+		return fmt.Errorf("无法保存截图绘制状态")
+	}
+	defer func() {
+		if call(gdi, "RestoreDC", c.back.dc, state) == 0 && err == nil {
+			err = fmt.Errorf("无法恢复截图绘制状态")
+		}
+	}()
+	if call(gdi, "IntersectClipRect", c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Max.X), u(invalid.Max.Y)) == 0 {
+		return fmt.Errorf("无法准备截图重绘区域")
+	}
+	if call(gdi, "BitBlt", c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Dx()), u(invalid.Dy()), c.dim.dc, u(invalid.Min.X), u(invalid.Min.Y), 0x00cc0020) == 0 {
+		return fmt.Errorf("无法重绘截图背景")
+	}
 	r := c.selected()
 	if !r.Empty() {
-		call(gdi, "BitBlt", c.back.dc, u(r.Min.X), u(r.Min.Y), u(r.Dx()), u(r.Dy()), c.original.dc, u(r.Min.X), u(r.Min.Y), 0x00cc0020)
+		if call(gdi, "BitBlt", c.back.dc, u(r.Min.X), u(r.Min.Y), u(r.Dx()), u(r.Dy()), c.original.dc, u(r.Min.X), u(r.Min.Y), 0x00cc0020) == 0 {
+			return fmt.Errorf("无法重绘截图选区")
+		}
 		frame(c.back.dc, captureWinRect(r.Inset(-1)), rgb(255, 155, 89))
 		frame(c.back.dc, captureWinRect(r.Inset(-2)), rgb(255, 155, 89))
 		label := c.dimensionsRect()
@@ -313,7 +345,10 @@ func (c *CaptureController) paint(dc uintptr, invalid image.Rectangle) {
 		}
 		drawText(c.back.dc, instruction, captureWinRect(hint), c.textFont, rgb(245, 247, 255), 1|4|0x20)
 	}
-	call(gdi, "BitBlt", dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Dx()), u(invalid.Dy()), c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), 0x00cc0020)
+	if call(gdi, "BitBlt", dc, u(invalid.Min.X), u(invalid.Min.Y), u(invalid.Dx()), u(invalid.Dy()), c.back.dc, u(invalid.Min.X), u(invalid.Min.Y), 0x00cc0020) == 0 || call(gdi, "GdiFlush") == 0 {
+		return fmt.Errorf("无法显示截图画布，请重新截图")
+	}
+	return nil
 }
 
 func (c *CaptureController) fail(err error) {
@@ -404,8 +439,16 @@ func captureWindowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	case 0xf:
 		var ps paintstruct
 		dc := call(user, "BeginPaint", hwnd, uintptr(unsafe.Pointer(&ps)))
-		c.paint(dc, image.Rect(int(ps.Paint.L), int(ps.Paint.T), int(ps.Paint.R), int(ps.Paint.B)))
+		err := c.paint(dc, image.Rect(int(ps.Paint.L), int(ps.Paint.T), int(ps.Paint.R), int(ps.Paint.B)))
+		if err != nil && validCaptureSnapshot(c.snapshot) {
+			// Rebuild the whole cache once if a partial repaint failed. Persistent
+			// native drawing errors cancel instead of leaving stale color blocks.
+			err = c.paint(dc, c.snapshot.Bounds())
+		}
 		call(user, "EndPaint", hwnd, uintptr(unsafe.Pointer(&ps)))
+		if err != nil {
+			c.fail(err)
+		}
 		return 0
 	case 0x201:
 		p := c.pointer(lp)

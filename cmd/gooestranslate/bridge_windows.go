@@ -205,6 +205,19 @@ func (a *appState) handleRPC(w *webWindow, r rpcRequest) (any, error) {
 			}
 		}
 		switch action {
+		case "window_state":
+			return w.resultWindowState(), nil
+		case "minimize_window":
+			call(user, "ShowWindow", w.hwnd, 6)
+		case "maximize_window":
+			w.toggleMaximized()
+			return w.resultWindowState(), nil
+		case "move_window":
+			if err := w.moveResultWindow(); err != nil {
+				return nil, err
+			}
+		case "window_menu":
+			w.showResultSystemMenu()
 		case "translate":
 			if a.data.Mode != "selection" && (p.Mode == "image" || p.Mode == "translate") {
 				a.data.Mode = p.Mode
@@ -465,6 +478,9 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	}
 	a := app
 	w := a.windows[hwnd]
+	if value, handled := handleResultFrame(w, msg, wp, lp, a.cfg.Theme); handled {
+		return value
+	}
 	switch msg {
 	case instanceActivationMessage:
 		if !a.testMode && a.settings != nil && a.settings.ready && hwnd == a.settings.hwnd {
@@ -540,6 +556,10 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case 5:
+		if w != nil && w.kind == "result" {
+			w.syncResultSystemMenu()
+			w.pushWindowState()
+		}
 		if w != nil && w.ready {
 			w.syncVisibility()
 		}
@@ -569,6 +589,10 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			w.browser.Resize()
 		}
 		return 0
+	case 0x116:
+		if w != nil && w.kind == "result" {
+			w.syncResultSystemMenu()
+		}
 	case 0x24:
 		var p [5]point
 		call(ntdll, "RtlMoveMemory", uintptr(unsafe.Pointer(&p)), lp, unsafe.Sizeof(p))
@@ -577,6 +601,12 @@ func webProcedure(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			dpi = 96
 		}
 		area := workArea(hwnd)
+		if w != nil && w.kind == "result" {
+			var bounds rect
+			call(user, "GetWindowRect", hwnd, uintptr(unsafe.Pointer(&bounds)))
+			monitor, work := resultMonitorAreas(bounds)
+			applyResultMaximizeGeometry(&p, monitor, work)
+		}
 		p[3] = point{int32(min(660*int(dpi)/96, int(area.R-area.L))), int32(min(480*int(dpi)/96, int(area.B-area.T)))}
 		call(ntdll, "RtlMoveMemory", lp, uintptr(unsafe.Pointer(&p)), unsafe.Sizeof(p))
 		return 0

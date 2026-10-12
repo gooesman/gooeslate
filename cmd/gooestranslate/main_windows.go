@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.7"
+const version = "0.3.8"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -39,6 +39,7 @@ type webWindow struct {
 	ready           bool
 	navigationOK    bool
 	navigationError int32
+	dragRegions     bool
 }
 type resultData struct {
 	Image                string               `json:"image,omitempty"`
@@ -283,7 +284,11 @@ func workArea(h uintptr) rect {
 }
 func (a *appState) newWebWindow(kind, title string, width, height int) (*webWindow, error) {
 	w := &webWindow{kind: kind}
-	w.hwnd = create("GooesTranslateWebV2", title, 0xcf0000|0x02000000, 0, 120, 90, width, height, 0, 0)
+	style := uintptr(0xcf0000 | 0x02000000)
+	if kind == "result" {
+		style = resultWindowStyle
+	}
+	w.hwnd = create("GooesTranslateWebV2", title, style, 0, 120, 90, width, height, 0, 0)
 	if w.hwnd == 0 {
 		return nil, fmt.Errorf("无法打开%s窗口", title)
 	}
@@ -300,6 +305,13 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	call(user, "SetWindowPos", w.hwnd, 0, u(int(area.L)+(int(area.R-area.L)-width)/2), u(int(area.T)+(int(area.B-area.T)-height)/2), u(width), u(height), 0x14)
 	w.browser = edge.NewChromium()
 	w.browser.DataPath = filepath.Join(filepath.Dir(configFile()), "WebView")
+	if a.testMode {
+		profile, err := filepath.Abs(filepath.Join(testDirectory(), "WebView-profile"))
+		if err != nil {
+			return nil, fmt.Errorf("无法创建独立测试界面目录：%w", err)
+		}
+		w.browser.DataPath = profile
+	}
 	w.browser.SetGlobalPermission(edge.CoreWebView2PermissionStateDeny)
 	w.browser.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
 		methods := *(**[5]uintptr)(unsafe.Pointer(args))
@@ -322,6 +334,9 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 		s.PutAreDefaultContextMenusEnabled(false)
 		s.PutAreDevToolsEnabled(false)
 		s.PutIsStatusBarEnabled(false)
+		if kind == "result" {
+			w.dragRegions = enableResultDragRegions(s)
+		}
 	}
 	html, e := uiFiles.ReadFile("ui/" + kind + ".html")
 	if e != nil {
@@ -329,7 +344,7 @@ func (a *appState) newWebWindow(kind, title string, width, height int) (*webWind
 	}
 	// The bridge must exist before page scripts run. Asynchronous Init followed
 	// immediately by NavigateToString can race registration of the script.
-	document := strings.Replace(string(html), "<head>", "<head><script>"+bridgeScript+"</script>", 1)
+	document := strings.Replace(string(html), "<head>", "<head><script>window.__nativeDragRegions="+jsonString(w.dragRegions)+";"+bridgeScript+"</script>", 1)
 	w.browser.NavigateToString(document)
 	w.browser.Resize()
 	return w, nil
@@ -359,7 +374,11 @@ func (a *appState) showResult() {
 	if a.result == nil {
 		return
 	}
-	call(user, "ShowWindow", a.result.hwnd, 9)
+	command := uintptr(5)
+	if call(user, "IsIconic", a.result.hwnd) != 0 {
+		command = 9
+	}
+	call(user, "ShowWindow", a.result.hwnd, command)
 	a.result.syncVisibility()
 	a.result.browser.Focus()
 	call(user, "SetWindowPos", a.result.hwnd, ^uintptr(0), 0, 0, 0, 0, 0x43)

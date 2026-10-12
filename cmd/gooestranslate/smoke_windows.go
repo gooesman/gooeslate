@@ -306,6 +306,21 @@ func (a *appState) runRenderProbe(directory string) (err error) {
 		completed := make(chan error, 2)
 		a.post(func() {
 			for _, w := range []*webWindow{a.settings, a.result} {
+				if w.kind == "result" {
+					frame, frameErr := resultFrameSnapshot(w)
+					report[phase+"_result_frame"] = frame
+					if frameErr != nil {
+						completed <- frameErr
+						continue
+					}
+				} else {
+					caption := call(user, "GetWindowLongPtrW", w.hwnd, ^uintptr(15))&0x00c00000 == 0x00c00000
+					report["settings_system_caption_preserved"] = caption
+					if !caption {
+						completed <- fmt.Errorf("设置窗口系统标题栏意外改变")
+						continue
+					}
+				}
 				visible, err := controllerVisible(w)
 				bounds, boundsErr := controllerBounds(w)
 				report[phase+"_"+w.kind+"_controller"] = map[string]any{"visible": visible, "width": bounds.R - bounds.L, "height": bounds.B - bounds.T, "navigation_ok": w.navigationOK}
