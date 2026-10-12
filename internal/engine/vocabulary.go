@@ -172,7 +172,7 @@ func AddVocabulary(ctx context.Context, client *http.Client, cfg VocabularyConfi
 		return "", errors.New("请先在设置中启用欧路生词本")
 	}
 	if cfg.Language == "en" && strings.IndexFunc(word, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0 {
-		return "", errors.New("英语生词本请收藏英文原文")
+		return "", errors.New("英语生词本请收藏英文单词或短语")
 	}
 	id := strings.TrimSpace(cfg.CategoryID)
 	if id == "" {
