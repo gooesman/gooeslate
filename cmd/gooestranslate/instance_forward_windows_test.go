@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func TestInstanceOpenImageResolvesSenderWorkingDirectory(t *testing.T) {

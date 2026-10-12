@@ -31,7 +31,7 @@ func CaptureSmokeTest(outputDir string) error {
 	}
 	defer c.Close()
 	creatingCapture = c
-	c.hwnd = create("GooesTranslateCaptureV2", "gooestranslate screenshot smoke", 0x80000000, 0x80, 0, 0, 800, 480, 0, 0)
+	c.hwnd = create("GooesTranslateCaptureV2", "Gooeslate screenshot smoke", 0x80000000, 0x80, 0, 0, 800, 480, 0, 0)
 	creatingCapture = nil
 	if c.hwnd == 0 {
 		return fmt.Errorf("截图窗口创建验证失败")

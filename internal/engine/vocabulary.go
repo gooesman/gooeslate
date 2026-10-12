@@ -117,7 +117,7 @@ func vocabularyRequest(ctx context.Context, client *http.Client, cfg VocabularyC
 		return nil, errors.New("生词本地址无效")
 	}
 	req.Header.Set("Authorization", "NIS "+key)
-	req.Header.Set("User-Agent", "gooestranslate")
+	req.Header.Set("User-Agent", "Gooeslate")
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

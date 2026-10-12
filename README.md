@@ -1,6 +1,10 @@
-# gooestranslate
+# 鹅译 · Gooeslate
 
-用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词、收藏和朗读。服务列表提供独立编辑和测试，显示当前使用项、配置缺失及最近测试结果。**v0.3.12** 原文和译文中的单词、短语均可显式收藏到欧路，收藏保留实际选中的文字。结果窗口使用完整圆角容器；原文区域可输入、粘贴和修改，按 Ctrl+Enter 翻译，也可选词查询。翻译期间继续输入会保留草稿。程序、托盘和界面统一使用鹅图标。配置导入与导出可备份服务、提示词、请求体和快捷键，默认不导出密钥。划词翻译默认通过 `Ctrl+Alt+D` 触发。
+鹅译（Gooeslate）是用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词、收藏和朗读。服务列表提供独立编辑和测试，显示当前使用项、配置缺失及最近测试结果。原文和译文中的单词、短语均可显式收藏到欧路，收藏保留实际选中的文字。
+
+**v0.3.13** 正式使用「鹅译 · Gooeslate」名称，保留已有设置及旧版配置备份的兼容性。圆角结果窗口支持输入、粘贴和修改原文，按 Ctrl+Enter 翻译，翻译期间继续输入会保留草稿。配置导入与导出可备份服务、提示词、请求体和快捷键，默认不导出密钥。划词翻译默认通过 `Ctrl+Alt+D` 触发。
+
+[项目主页](https://github.com/gooesman/gooeslate) · [下载最新版本](https://github.com/gooesman/gooeslate/releases/latest)
 
 截图工具使用 Win32 绘制，设置与结果界面使用内嵌 WebView2。运行程序需要 Microsoft Edge WebView2 Runtime，无需 Node、Python 或额外插件运行环境。
 
@@ -14,12 +18,12 @@
 
 ## 开始使用
 
-1. 运行 `gooestranslate.exe`，在“翻译服务”“文字识别”“语音”列表点击“添加服务”，选择类型，填写服务地址、模型和需要的密钥。点击“测试”确认服务与响应格式，再选择当前使用项并保存。新安装不包含个人服务地址或密钥；Windows 系统朗读无需网络配置。
+1. 运行 `gooeslate.exe`，在“翻译服务”“文字识别”“语音”列表点击“添加服务”，选择类型，填写服务地址、模型和需要的密钥。点击“测试”确认服务与响应格式，再选择当前使用项并保存。新安装不包含个人服务地址或密钥；Windows 系统朗读无需网络配置。
 2. 按 `Ctrl+Shift+S` 框选图片，松开鼠标后在操作栏选择“识别”“翻译”或“原图翻译”。也可以在托盘右键菜单直接开始对应操作，或从设置中心打开 PNG / JPEG 图片。
 3. 可从托盘“文本翻译”或设置的“划词翻译 → 输入文本翻译”打开输入窗口。原文区域支持输入、粘贴和修改；点击“翻译”或按 Ctrl+Enter 提交，普通 Enter 换行。修改截图原文后按文本翻译，不沿用原图坐标。未修改截图时仍可在结果窗口切换“文字”和“原图”视图。选中文字可以复制、查词或朗读；支持坐标的 OCR 还允许在原图中点击文字块、拖动框选及 `Ctrl` 增选。
 4. 选择目标语言，点击“翻译”查看译文；勾选“显示译文”在原图相应位置覆盖译文，点击“导出图片”保存 PNG。配置欧路生词本后，可显式点击“收藏”保存原文或译文中选中的单词、短语。
 
-解压包内运行 `创建桌面快捷方式.ps1` 可以在桌面建立快捷方式，图标与程序窗口保持一致。该脚本只创建本用户的快捷方式；请将解压目录放在长期使用的位置。
+解压包内运行 `创建桌面快捷方式.ps1` 可以在桌面建立「鹅译」快捷方式，图标与程序窗口保持一致。该脚本只创建本用户的快捷方式；请将解压目录放在长期使用的位置。
 
 关闭设置窗口默认收起到托盘，程序继续等待快捷键。双击托盘图标打开设置，右键菜单可以退出程序。关闭结果窗口只收起当前结果。
 
@@ -55,7 +59,7 @@
 
 ## 配置导入与导出
 
-设置侧栏点击“导入与导出”：
+设置侧栏点击“导入与导出”。继续兼容旧版的 `gooestranslate-config` 配置格式：
 
 - **导出配置**：选择 JSON 文件保存位置。导出的是已保存的设置，包括服务、当前使用项、提示词、请求头与请求体、OCR 坐标格式、语音、生词本、主题、截图行为和快捷键；未保存的编辑草稿不包含在内。
 - **包含 API 密钥和授权信息**：默认关闭。关闭时移除专用密钥和常见授权字段，并保留 `{{api_key}}` 等模板变量。自定义请求可能嵌有其它敏感内容，分享前请检查文件。勾选后凭据以明文写入导出文件，适合个人备份和迁移，请妥善保管。
@@ -220,7 +224,7 @@ TTS 可分别配置多个服务，并选择默认服务：
 
 ## 本地设置与数据流
 
-设置保存在 `%APPDATA%\gooestranslate\settings.json`。翻译、OCR、TTS 密钥及欧路 Token 使用 Windows DPAPI 加密，通常只能由同一 Windows 用户解密。设置页面不返回已有密钥明文；留空保留已有值，填写新值更新，勾选清除后保存可删除。旧版本的单服务设置会迁移为服务配置。
+更名后继续使用 `%APPDATA%\gooestranslate\settings.json`，已有服务、密钥和快捷键无需重新配置。翻译、OCR、TTS 密钥及欧路 Token 使用 Windows DPAPI 加密，通常只能由同一 Windows 用户解密。设置页面不返回已有密钥明文；留空保留已有值，填写新值更新，勾选清除后保存可删除。旧版本的单服务设置会迁移为服务配置。
 
 请求头和请求体模板是普通配置文本；在模板中引用 `{{api_key}}`，不要把密钥直接写成模板里的字面量。
 
@@ -237,16 +241,16 @@ Windows 10/11 x64，Go 1.23 或更高版本。依赖通过 Go Modules 获取，�
 ```powershell
 go mod download
 go test ./...
-go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/gooestranslate.exe ./cmd/gooestranslate
+go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/gooeslate.exe ./cmd/gooestranslate
 ```
 
 构建带控制台输出的验证程序：
 
 ```powershell
-go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
-./dist/gooestranslate-check.exe --smoke-test test-artifacts
-./dist/gooestranslate-check.exe --ui-smoke-test test-artifacts
-./dist/gooestranslate-check.exe --render-smoke-test test-artifacts
+go build -o dist/gooeslate-check.exe ./cmd/gooestranslate
+./dist/gooeslate-check.exe --smoke-test test-artifacts
+./dist/gooeslate-check.exe --ui-smoke-test test-artifacts
+./dist/gooeslate-check.exe --render-smoke-test test-artifacts
 ```
 
 `--smoke-test` 检查截图缓存与操作栏、译文图片导出、DPAPI 和系统声音枚举。`--ui-smoke-test` 检查 WebView2 页面逻辑、设置和结果通信、密钥字段隔离，以及原图结果推送；它不显示窗口，不能单独验证画面正常。
@@ -256,7 +260,7 @@ go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
 配置本机服务后，可显式运行真实接口测试。它上传程序生成的测试图片，执行 OCR、翻译和模型查词，可能产生少量 API 用量：
 
 ```powershell
-./dist/gooestranslate-check.exe --live-test test-artifacts
+./dist/gooeslate-check.exe --live-test test-artifacts
 ```
 
 测试图片、译文预览和结果 JSON 写入 `test-artifacts`，该目录已在 Git 中忽略。单元测试还覆盖多服务选择、自定义请求与模板、坐标解析、WAV/MP3、欧路授权及字符串生词本 ID；这些协议测试使用本地模拟服务。
@@ -273,6 +277,8 @@ go build -o dist/gooestranslate-check.exe ./cmd/gooestranslate
 - EXE 尚未进行代码签名。
 
 ## 项目结构
+
+Go 模块为 `github.com/gooesman/gooeslate`；`cmd/gooestranslate` 保留历史源码目录名，构建后的程序使用 `gooeslate.exe`。
 
 - `internal/engine`：服务配置、请求模板、OCR、翻译、词典、生词本、语音获取、坐标处理与协议测试。
 - `cmd/gooestranslate`：Win32 截图、WebView2 通信、托盘、快捷键、SAPI、网络音频播放、加密设置、剪贴板与导出。

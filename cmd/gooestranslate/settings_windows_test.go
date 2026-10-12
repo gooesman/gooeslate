@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func TestSettingsPreserveUnreadableCredential(t *testing.T) {

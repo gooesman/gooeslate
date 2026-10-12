@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 	"image"
 	"image/png"
 	"os"

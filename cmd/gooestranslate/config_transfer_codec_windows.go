@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 const configurationFileSizeLimit = 2 << 20
@@ -110,7 +110,7 @@ func decodeConfiguration(raw []byte) (engine.Config, configurationImportSummary,
 	}
 	doc, ok := value.(map[string]any)
 	if !ok {
-		return fail("请选择 gooestranslate 导出的配置文件")
+		return fail("请选择鹅译导出的配置文件")
 	}
 	allowed := map[string]bool{"format": true, "schema_version": true, "exported_at": true, "includes_credentials": true, "config": true}
 	if len(doc) != len(allowed) {
@@ -122,7 +122,7 @@ func decodeConfiguration(raw []byte) (engine.Config, configurationImportSummary,
 		}
 	}
 	if doc["format"] != configurationTransferFormat {
-		return fail("请选择 gooestranslate 导出的配置文件")
+		return fail("请选择鹅译导出的配置文件")
 	}
 	version, ok := doc["schema_version"].(json.Number)
 	if !ok || version.String() != "1" {

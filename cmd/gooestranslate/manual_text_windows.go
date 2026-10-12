@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 // Validate before touching a live translation so an invalid or blank input

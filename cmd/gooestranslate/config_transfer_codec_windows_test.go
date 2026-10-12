@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func transferTestConfig() engine.Config {

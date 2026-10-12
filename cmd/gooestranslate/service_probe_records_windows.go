@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 type serviceProbeRecord struct {

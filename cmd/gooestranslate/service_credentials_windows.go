@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func cloneConfig(c engine.Config) engine.Config {

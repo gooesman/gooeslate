@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 // Configuration changes must invalidate completions from the previous service.

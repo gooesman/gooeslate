@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 	"github.com/jchv/go-webview2/pkg/edge"
 	"image"
 	"image/color"
@@ -24,7 +24,8 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.12"
+const version = "0.3.13"
+const settingsWindowTitle = "鹅译 · 设置"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
@@ -192,12 +193,12 @@ func run() int {
 		fatal(err)
 		return 1
 	}
-	app.settings, e = app.newWebWindow("settings", "gooestranslate · 设置", 1080, 760)
+	app.settings, e = app.newWebWindow("settings", settingsWindowTitle, 1080, 760)
 	if e != nil {
 		fatal(e)
 		return 1
 	}
-	app.result, e = app.newWebWindow("result", "gooestranslate · 识别与翻译", 840, 700)
+	app.result, e = app.newWebWindow("result", "鹅译 · 识别与翻译", 840, 700)
 	if e != nil {
 		fatal(e)
 		app.quit()
@@ -270,7 +271,7 @@ func configureStdin() {
 }
 func jsonString(v any) string { b, _ := json.Marshal(v); return string(b) }
 func fatal(e error) {
-	call(user, "MessageBoxW", 0, uintptr(unsafe.Pointer(str(e.Error()))), uintptr(unsafe.Pointer(str("gooestranslate"))), 0x10)
+	call(user, "MessageBoxW", 0, uintptr(unsafe.Pointer(str(e.Error()))), uintptr(unsafe.Pointer(str("鹅译"))), 0x10)
 }
 func workArea(h uintptr) rect {
 	var m struct {

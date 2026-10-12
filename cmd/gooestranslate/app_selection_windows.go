@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func effectiveHotkeys(cfg engine.Config) engine.Hotkeys {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 type serviceProbeRequest struct {

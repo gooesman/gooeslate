@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 var instanceActivationMessage = uint32(call(user, "RegisterWindowMessageW", uintptr(unsafe.Pointer(str("gooestranslate.ActivateSettings.v1")))))
@@ -94,7 +94,11 @@ func activateApplicationInstance(args []string) error {
 	// acknowledgement so a click during login startup is not lost.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		hwnd := call(user, "FindWindowW", uintptr(unsafe.Pointer(str("GooesTranslateWebV2"))), uintptr(unsafe.Pointer(str("gooestranslate · 设置"))))
+		hwnd := call(user, "FindWindowW", uintptr(unsafe.Pointer(str("GooesTranslateWebV2"))), uintptr(unsafe.Pointer(str(settingsWindowTitle))))
+		if hwnd == 0 {
+			// A new launch can activate an earlier version that is still running.
+			hwnd = call(user, "FindWindowW", uintptr(unsafe.Pointer(str("GooesTranslateWebV2"))), uintptr(unsafe.Pointer(str("gooestranslate · 设置"))))
+		}
 		if hwnd != 0 {
 			var pid uint32
 			call(user, "GetWindowThreadProcessId", hwnd, uintptr(unsafe.Pointer(&pid)))

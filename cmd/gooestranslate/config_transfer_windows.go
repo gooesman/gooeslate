@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 type stagedConfigurationImport struct {
@@ -220,7 +220,7 @@ func writeConfigurationExport(file string, data []byte) error {
 func configurationFileDialog(owner uintptr, save bool) (string, error) {
 	buf := make([]uint16, 32768)
 	var filter []uint16
-	for _, entry := range []string{"gooestranslate 配置 (JSON)", "*.json", ""} {
+	for _, entry := range []string{"鹅译配置 (JSON)", "*.json", ""} {
 		filter = append(filter, syscall.StringToUTF16(entry)...)
 	}
 	title, proc := "导入配置", "GetOpenFileNameW"
@@ -228,7 +228,7 @@ func configurationFileDialog(owner uintptr, save bool) (string, error) {
 	if save {
 		title, proc = "导出配置", "GetSaveFileNameW"
 		flags = 0x80000 | 0x800 | 2 | 8 // Confirm overwriting a chosen file.
-		copy(buf, syscall.StringToUTF16("gooestranslate-config-"+time.Now().Format("20060102")+".json"))
+		copy(buf, syscall.StringToUTF16("gooeslate-config-"+time.Now().Format("20060102")+".json"))
 	}
 	o := openfilename{Owner: owner, File: &buf[0], MaxFile: uint32(len(buf)), Filter: &filter[0], FilterIndex: 1, Title: str(title), Flags: flags, DefaultExt: str("json")}
 	o.Size = uint32(unsafe.Sizeof(o))

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 )
 
 func TestModelCatalogDraftUsesMatchingSecretWithoutRequiredModel(t *testing.T) {

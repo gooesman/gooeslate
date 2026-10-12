@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 	"syscall"
 	"unsafe"
 )
@@ -48,7 +48,7 @@ func (a *appState) trayIcon(operation uintptr) bool {
 	}
 	n := notifyIcon{Hwnd: a.settings.hwnd, ID: 1, Flags: 1 | 2 | 4, Callback: trayMessage, Icon: icon}
 	n.Size = uint32(unsafe.Sizeof(n))
-	copy(n.Tip[:], syscall.StringToUTF16("gooestranslate · 右键截图，双击打开设置"))
+	copy(n.Tip[:], syscall.StringToUTF16("鹅译 · Gooeslate · 右键截图，双击打开设置"))
 	return call(syscall.NewLazyDLL("shell32.dll"), "Shell_NotifyIconW", operation, uintptr(unsafe.Pointer(&n))) != 0
 }
 func (a *appState) trayMenu() {

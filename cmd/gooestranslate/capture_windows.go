@@ -149,7 +149,7 @@ func (c *CaptureController) HandleTimer() {
 		return
 	}
 	creatingCapture = c
-	c.hwnd = create("GooesTranslateCaptureV2", "gooestranslate · 框选截图", 0x80000000, 0x8|0x80, c.bounds.Min.X, c.bounds.Min.Y, c.bounds.Dx(), c.bounds.Dy(), 0, 0)
+	c.hwnd = create("GooesTranslateCaptureV2", "鹅译 · 框选截图", 0x80000000, 0x8|0x80, c.bounds.Min.X, c.bounds.Min.Y, c.bounds.Dx(), c.bounds.Dy(), 0, 0)
 	creatingCapture = nil
 	if c.hwnd == 0 {
 		c.fail(fmt.Errorf("无法打开截图框选窗口"))
@@ -354,7 +354,7 @@ func (c *CaptureController) paint(dc uintptr, invalid image.Rectangle) (err erro
 func (c *CaptureController) fail(err error) {
 	c.lastError = err
 	c.release(true)
-	call(user, "MessageBoxW", c.owner, uintptr(unsafe.Pointer(str(err.Error()))), uintptr(unsafe.Pointer(str("gooestranslate · 截图"))), 0x10)
+	call(user, "MessageBoxW", c.owner, uintptr(unsafe.Pointer(str(err.Error()))), uintptr(unsafe.Pointer(str("鹅译 · 截图"))), 0x10)
 	if c.onCancel != nil {
 		c.onCancel()
 	}

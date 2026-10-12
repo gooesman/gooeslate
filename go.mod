@@ -1,4 +1,4 @@
-module github.com/gooesman/gooestranslate
+module github.com/gooesman/gooeslate
 
 go 1.23
 

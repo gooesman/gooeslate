@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gooesman/gooestranslate/internal/engine"
+	"github.com/gooesman/gooeslate/internal/engine"
 	"golang.org/x/sys/windows/registry"
 )
 
