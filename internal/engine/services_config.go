@@ -47,7 +47,14 @@ func NormalizeConfig(c Config) Config {
 			p.RequestMode = "standard"
 		}
 		if p.ResponsePath == "" {
-			p.ResponsePath = "choices.0.message.content"
+			if p.Provider == "anthropic" {
+				p.ResponsePath = "content"
+			} else {
+				p.ResponsePath = "choices.0.message.content"
+			}
+		}
+		if p.Provider == "anthropic" && p.MaxTokens == 0 {
+			p.MaxTokens = defaultAnthropicMaxTokens
 		}
 		if p.Headers == "" {
 			p.Headers = "{}"
@@ -277,7 +284,7 @@ func ValidateServiceConfig(c Config) error {
 	var names []string
 	for _, p := range c.TranslationServices {
 		names = append(names, p.ID)
-		if p.Provider != "openai" && p.Provider != "http" {
+		if p.Provider != "openai" && p.Provider != "anthropic" && p.Provider != "http" {
 			return errors.New("翻译服务类型无效")
 		}
 		if p.RequestMode != "standard" && p.RequestMode != "custom" {
@@ -290,6 +297,13 @@ func ValidateServiceConfig(c Config) error {
 		}
 		if math.IsNaN(p.Temperature) || math.IsInf(p.Temperature, 0) || p.Temperature < 0 || p.Temperature > 2 {
 			return errors.New("温度范围为 0 到 2")
+		}
+		minimumTokens := 0
+		if p.Provider == "anthropic" {
+			minimumTokens = 1
+		}
+		if p.MaxTokens < minimumTokens || p.MaxTokens > maxAnthropicMaxTokens {
+			return fmt.Errorf("最大输出长度范围为 %d 到 1000000 tokens", minimumTokens)
 		}
 		if err := validateCommon(p.Headers, p.BodyTemplate, p.TimeoutMS); err != nil {
 			return fmt.Errorf("翻译配置：%w", err)

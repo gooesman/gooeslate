@@ -61,6 +61,7 @@ type TranslationService struct {
 	BodyTemplate    string  `json:"body_template"`
 	TimeoutMS       int     `json:"timeout_ms"`
 	Temperature     float64 `json:"temperature"`
+	MaxTokens       int     `json:"max_tokens"`
 	DisableThinking bool    `json:"disable_thinking"`
 	SystemPrompt    string  `json:"system_prompt"`
 	UserPrompt      string  `json:"user_prompt"`

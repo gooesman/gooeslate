@@ -2,7 +2,7 @@
 
 鹅译（Gooeslate）是用 Go 实现的 Windows 桌面翻译工具。主窗口是设置中心，日常通过托盘或快捷键截图，在独立结果窗口完成文字识别、翻译、原图选字、查词、收藏和朗读。服务列表提供独立编辑和测试，显示当前使用项、配置缺失及最近测试结果。原文和译文中的单词、短语均可显式收藏到欧路，收藏保留实际选中的文字。
 
-**v0.3.13** 正式使用「鹅译 · Gooeslate」名称，保留已有设置及旧版配置备份的兼容性。圆角结果窗口支持输入、粘贴和修改原文，按 Ctrl+Enter 翻译，翻译期间继续输入会保留草稿。配置导入与导出可备份服务、提示词、请求体和快捷键，默认不导出密钥。划词翻译默认通过 `Ctrl+Alt+D` 触发。
+**v0.3.14** 新增 Anthropic 兼容翻译服务，支持模型列表、提示词、最大输出长度、完整 JSON 请求、连接测试及默认模型查词；OpenAI 兼容服务也新增 `max_tokens` 输出上限设置。保留已有设置及旧版配置备份的兼容性。圆角结果窗口支持输入、粘贴和修改原文，按 Ctrl+Enter 翻译，翻译期间继续输入会保留草稿。配置导入与导出可备份服务、提示词、请求体和快捷键，默认不导出密钥。划词翻译默认通过 `Ctrl+Alt+D` 触发。
 
 [项目主页](https://github.com/gooesman/gooeslate) · [下载最新版本](https://github.com/gooesman/gooeslate/releases/latest)
 
@@ -83,7 +83,7 @@
 
 ## 翻译服务与语言
 
-可选择 OpenAI 兼容、Ollama 或自定义 HTTP 预设。OpenAI 兼容服务只填域名时，自动使用 `/v1/chat/completions`；填写 API 基础路径时保留该路径并补全 `/chat/completions`，也接受完整接口地址。模型查词及 OpenAI 视觉识别使用相同规则；兼容语音的裸域名自动使用 `/v1/audio/speech`。自定义 HTTP 使用填写的完整地址，不添加路径。
+可选择 OpenAI 兼容、Anthropic 兼容、Ollama 或自定义 HTTP 预设。OpenAI 兼容服务只填域名时，自动使用 `/v1/chat/completions`；填写 API 基础路径时保留该路径并补全 `/chat/completions`，也接受完整接口地址。模型查词及 OpenAI 视觉识别使用相同规则；兼容语音的裸域名自动使用 `/v1/audio/speech`。自定义 HTTP 使用填写的完整地址，不添加路径。
 
 模型输入框右侧的“获取模型”使用当前草稿地址、请求头和密钥查询 `GET /models`，无需先保存或填写模型。已有服务留空密钥时复用该服务已保存的凭据；新建或复制服务不会借用其他服务的密钥。列表支持搜索和点选，选择后仍可手动修改，点击保存设置生效。查询失败、列表为空或没有匹配项时保留原模型；修改连接参数后旧列表会失效。获取列表不代表所选模型已通过翻译、视觉或语音测试，仍需按实际用途点击“测试服务”。
 
@@ -96,11 +96,49 @@
 | `https://api.example.com/proxy/openai` | `https://api.example.com/proxy/openai/chat/completions` |
 | `https://api.example.com/chat/completions` | 保留完整地址 |
 
+### 最大输出 Token
+
+OpenAI 兼容服务中，“最大输出 Token”设为正整数时会在标准请求中发送 `max_tokens`；设为 `0` 时省略此字段，沿用服务默认。旧配置保持 `0`，模型查词沿用同一设置。
+
+例如供应商提供 `/v1/chat/completions`、Bearer 授权、`model: "Opus"`、`max_tokens: 1024` 的可用示例时，应选择“OpenAI 兼容”，模型填 `Opus`，最大输出 Token 填 `1024`。接口类型按实际请求路径和协议选择，模型名称不决定接口类型。若该示例不使用额外的关闭思考参数，可取消“关闭模型思考”。
+
+“完整 JSON 请求”以请求体中的参数为准，不自动加入这个字段；可写 `"max_tokens": 1024`，或用 `"max_tokens": "{{max_tokens}}"` 引用设置中的正数。兼容网关的 `group` 等额外字段同样可以添加到请求体。
+
+![OpenAI 输出上限（示例配置）](docs/screenshots/openai-max-tokens.png)
+
+### Anthropic 兼容
+
+在“翻译服务 → 添加服务”选择“Anthropic 兼容”，填写官方或兼容接口的地址和 API 密钥，再获取模型或手动输入模型名。此类型用于文字翻译、原图文字块翻译和默认模型查词，OCR 仍使用单独配置的识别服务。
+
+裸域名自动使用 `/v1/messages`，API 基础路径补全 `/messages`；也可填写完整 Messages 地址。默认请求使用 `x-api-key` 和 `anthropic-version: 2023-06-01`，系统提示词放在顶层 `system`，用户提示词放在 `messages`。模型列表使用对应 `/models` 地址，并读取分页结果。[Messages 协议](https://platform.claude.com/docs/en/api/messages/create)、[模型列表协议](https://platform.claude.com/docs/en/api/models/list)。
+
+![Anthropic 服务（示例配置）](docs/screenshots/anthropic-service.png)
+
+最大输出长度默认 `4096`，可以按服务配置调整；实际允许的上限由模型决定。达到输出上限时会提示增加长度。标准 Anthropic 请求省略温度等采样参数，以兼容不支持这些参数的新模型；需要旧模型采样参数时可使用完整 JSON 请求。
+
+Anthropic 的“关闭模型思考”发送 `{"thinking":{"type":"disabled"}}`。关闭此开关时按服务默认或自定义请求体中的设置处理，不发送 Qwen 的 `chat_template_kwargs`。若所选模型不支持关闭思考，请取消勾选。
+
+完整 JSON 示例：
+
+```json
+{
+  "model": "{{model}}",
+  "max_tokens": "{{max_tokens}}",
+  "system": "{{system}}",
+  "messages": "{{messages}}",
+  "stream": false
+}
+```
+
+默认读取 `content` 中的文本块，合并文本并忽略思考或工具块；代理使用其它响应结构时可指定译文响应路径。原图翻译仍要求译文保留输入的文字块 `id`。
+
+如果兼容网关要求 `group: "vip"` 等扩展参数，可将其添加到完整 JSON 请求中，程序会保留该字段；模型名称也可手动填写（例如 `Fable`）。分组是否有效由网关决定。当前请求使用 `stream: false`，不接受直接粘贴 `stream: true` 的聊天示例；翻译时请保留 `{{messages}}`，让当前待翻译文字进入请求。
+
 如果测试提示“服务返回了 HTML 网页而非 JSON”，请求可能到达了管理网页或错误路径，请核对供应商提供的 API 地址。
 
 目标语言默认“自动中英互译”，也可固定为简体中文、繁体中文、英语、日语或韩语。自动模式使用简单启发式：文本包含汉字且汉字至少占字母字符的一半时译为英语，其它内容译为简体中文。结果窗口显示推定的原文语言与实际目标语言，并可单独调整本次翻译目标。这不是完整语言检测，混合语言或其它语种内容建议手动指定目标语言。
 
-每个翻译服务可独立设置模型、温度、超时、System Prompt 和 User Prompt。默认提示词要求返回与输入文字块一一对应的 JSON 数组：
+每个翻译服务可独立设置模型、超时、System Prompt 和 User Prompt；OpenAI 类型还可设置温度，OpenAI 与 Anthropic 类型均可设置最大输出长度。默认提示词要求返回与输入文字块一一对应的 JSON 数组：
 
 ```json
 [
@@ -111,7 +149,7 @@
 
 原图翻译依赖这些 `id` 对应关系，修改提示词时应保留格式及顺序。自定义接口也可返回与输入行数相同、按原顺序逐行排列的纯文本译文。
 
-勾选“关闭模型思考”会在翻译及模型词典请求中合并以下字段，保留 `chat_template_kwargs` 的其它内容：
+OpenAI 兼容服务勾选“关闭模型思考”会在翻译及模型词典请求中合并以下字段，保留 `chat_template_kwargs` 的其它内容：
 
 ```json
 {"chat_template_kwargs": {"enable_thinking": false}}
@@ -121,7 +159,7 @@
 
 ## 提示词、请求头与完整 JSON
 
-“标准 OpenAI 请求”根据模型、温度和提示词构造非流式 Chat Completions 请求。“完整 JSON 请求”使用编辑器中的请求体；可同时设置请求头 JSON 及译文响应路径。自定义 HTTP 预设默认使用完整 JSON。
+“标准 OpenAI 请求”根据模型、温度和提示词构造非流式 Chat Completions 请求；Anthropic 类型的标准模式使用 Messages 协议。“完整 JSON 请求”使用编辑器中的请求体；可同时设置请求头 JSON 及译文响应路径。自定义 HTTP 预设默认使用完整 JSON。
 
 模板必须是有效的 JSON 对象，变量放在 JSON 值中。完整变量值会保留原类型，例如 `"messages": "{{messages}}"` 会替换为消息数组，`"speed": "{{speed}}"` 会替换为数字；嵌入字符串的变量会作为文本替换，并由 JSON 编码处理引号和换行。
 
@@ -138,7 +176,9 @@
 | --- | --- |
 | `{{text}}` | 当前任务的文字；翻译时为逐行原文，查词时为单词 JSON，TTS 时为朗读文本 |
 | `{{lines}}` | 含 `id`、`text` 的翻译输入数组 |
-| `{{messages}}` | 已渲染提示词构成的消息数组；视觉 OCR 时包含图片消息 |
+| `{{messages}}` | 已渲染提示词构成的消息数组；Anthropic 不含 system 角色，视觉 OCR 时包含图片消息 |
+| `{{system}}` / `{{system_prompt}}` / `{{user_prompt}}` | 已渲染的系统或用户提示词 |
+| `{{max_tokens}}` | 当前翻译服务的最大输出长度 |
 | `{{target_language}}` / `{{source_language}}` | 当前翻译目标与启发式推定的原文语言 |
 | `{{model}}` / `{{api_key}}` | 当前服务配置的模型与密钥 |
 | `{{image_base64}}` / `{{image_data_url}}` | OCR 上传图片的 JPEG Base64 / Data URL |
@@ -147,7 +187,7 @@
 
 变量按任务提供，图片变量用于 OCR，文字块变量用于翻译，发音变量用于 TTS。未用于当前任务的变量为空值。未知变量、未闭合变量、无效 JSON 和流式请求会被拒绝；`stream` 如存在必须是布尔值 `false`。
 
-响应路径支持点号和数组索引，例如 `choices.0.message.content`、`choices[0].message.content`、`data.translations`。OCR 直接返回数组时可留空响应路径。请求头 JSON 的值必须是字符串，可使用 `{{api_key}}`；已填写密钥时默认发送 `Authorization: Bearer ...`，自定义请求头可覆盖授权方式。不要手工填写 `Host`、`Content-Length` 或 multipart 的边界。
+响应路径支持点号和数组索引，例如 `choices.0.message.content`、`choices[0].message.content`、`data.translations`。OCR 直接返回数组时可留空响应路径。请求头 JSON 的值必须是字符串，可使用 `{{api_key}}`；OpenAI 等类型已填写密钥时默认发送 `Authorization: Bearer ...`；Anthropic 默认使用 `x-api-key`。自定义请求头可覆盖授权方式和协议版本。不要手工填写 `Host`、`Content-Length` 或 multipart 的边界。
 
 各服务及欧路请求超时可设置为 **1000–600000 毫秒**，按所选服务配置生效。接口请求不跟随重定向，请填写最终服务地址。取消任务或新截图后，过期结果不会覆盖新任务的界面；保存设置会取消待处理的查词、收藏和朗读，已在服务器完成的收藏不能撤回。
 

@@ -16,11 +16,11 @@ import (
 type templateVariables map[string]any
 
 func validationVariables() templateVariables {
-	return templateVariables{"lines": []Line{{ID: 0, Text: "text"}}, "messages": []map[string]any{{"role": "user", "content": "text"}}, "text": "text", "image": "image", "image_base64": "image", "image_data_url": "data:image/jpeg;base64,image", "target_language": "简体中文", "source_language": "英语", "model": "model", "api_key": "key", "voice": "voice", "speed": 1.0}
+	return templateVariables{"lines": []Line{{ID: 0, Text: "text"}}, "messages": []map[string]any{{"role": "user", "content": "text"}}, "text": "text", "image": "image", "image_base64": "image", "image_data_url": "data:image/jpeg;base64,image", "target_language": "简体中文", "source_language": "英语", "model": "model", "api_key": "key", "voice": "voice", "speed": 1.0, "system": "system", "system_prompt": "system", "user_prompt": "user", "max_tokens": defaultAnthropicMaxTokens}
 }
 
 func emptyTemplateVariables() templateVariables {
-	return templateVariables{"lines": []Line{}, "messages": []map[string]any{}, "text": "", "image": "", "image_base64": "", "image_data_url": "", "target_language": "", "source_language": "", "model": "", "api_key": "", "voice": "", "speed": 1.0}
+	return templateVariables{"lines": []Line{}, "messages": []map[string]any{}, "text": "", "image": "", "image_base64": "", "image_data_url": "", "target_language": "", "source_language": "", "model": "", "api_key": "", "voice": "", "speed": 1.0, "system": "", "system_prompt": "", "user_prompt": "", "max_tokens": defaultAnthropicMaxTokens}
 }
 
 func renderTemplateText(text string, vars templateVariables) (string, error) {

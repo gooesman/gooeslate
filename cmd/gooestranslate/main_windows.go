@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.13"
+const version = "0.3.14"
 const settingsWindowTitle = "鹅译 · 设置"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001

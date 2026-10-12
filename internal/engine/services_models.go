@@ -11,7 +11,7 @@ import (
 	"unicode"
 )
 
-// ListModels queries the selected service's OpenAI-compatible model catalog.
+// ListModels queries the selected service's model catalog.
 // A model is deliberately not required: this is how an unconfigured service
 // obtains the names that can be selected in its editor.
 func ListModels(ctx context.Context, client *http.Client, cfg Config, kind string) ([]string, error) {
@@ -23,6 +23,7 @@ func ListModels(ctx context.Context, client *http.Client, cfg Config, kind strin
 		p := ActiveTranslation(cfg)
 		provider, endpoint, key, headers, timeout = p.Provider, p.BaseURL, p.APIKey, p.Headers, p.TimeoutMS
 		vars["model"] = p.Model
+		vars["max_tokens"] = p.MaxTokens
 	case "ocr":
 		p := ActiveOCR(cfg)
 		provider, endpoint, key, headers, timeout = p.Provider, p.URL, p.APIKey, p.Headers, p.TimeoutMS
@@ -34,8 +35,8 @@ func ListModels(ctx context.Context, client *http.Client, cfg Config, kind strin
 	default:
 		return nil, errors.New("此类服务不支持获取模型列表")
 	}
-	if provider != "openai" {
-		return nil, errors.New("获取模型列表需要选择 OpenAI 兼容服务，其他服务请手动填写模型")
+	if provider != "openai" && (provider != "anthropic" || kind != "translation") {
+		return nil, errors.New("此服务暂不支持获取模型列表，请手动填写模型")
 	}
 	if strings.TrimSpace(endpoint) == "" {
 		return nil, errors.New("请先填写服务地址，再获取模型列表")
@@ -49,6 +50,17 @@ func ListModels(ctx context.Context, client *http.Client, cfg Config, kind strin
 	vars["api_key"] = key
 	ctx, cancel := serviceContext(ctx, timeout)
 	defer cancel()
+
+	// Copy the client so a caller-supplied transport or timeout is retained,
+	// while catalog requests never forward credentials through redirects.
+	if client == nil {
+		client = HTTPClient()
+	}
+	queryClient := *client
+	queryClient.CheckRedirect = HTTPClient().CheckRedirect
+	if provider == "anthropic" {
+		return listAnthropicModels(ctx, &queryClient, endpoint, key, headers, vars)
+	}
 	req, err := makeServiceRequest(ctx, modelsEndpoint(endpoint), "application/json", key, headers, vars, nil)
 	if err != nil {
 		return nil, err
@@ -57,14 +69,15 @@ func ListModels(ctx context.Context, client *http.Client, cfg Config, kind strin
 	if req.Header.Get("Accept") == "" {
 		req.Header.Set("Accept", "application/json")
 	}
-	// Copy the client so a caller-supplied transport or timeout is retained,
-	// while catalog requests never forward credentials through redirects.
-	if client == nil {
-		client = HTTPClient()
+	value, err := modelCatalogValue(&queryClient, req)
+	if err != nil {
+		return nil, err
 	}
-	queryClient := *client
-	queryClient.CheckRedirect = HTTPClient().CheckRedirect
-	raw, err := response(&queryClient, req)
+	return modelIDs(value)
+}
+
+func modelCatalogValue(client *http.Client, req *http.Request) (any, error) {
+	raw, err := response(client, req)
 	if err != nil {
 		var status *httpStatusError
 		if errors.As(err, &status) {
@@ -77,11 +90,87 @@ func ListModels(ctx context.Context, client *http.Client, cfg Config, kind strin
 		}
 		return nil, err
 	}
-	value, err := responseValue(raw, "")
+	return responseValue(raw, "")
+}
+
+func listAnthropicModels(ctx context.Context, client *http.Client, base, key, headers string, vars templateVariables) ([]string, error) {
+	u, err := url.Parse(anthropicEndpoint(base, "/models"))
 	if err != nil {
-		return nil, err
+		return nil, errors.New("请输入有效的模型列表接口地址")
 	}
-	return modelIDs(value)
+	query := u.Query()
+	query.Set("limit", "1000")
+	seenCursors := map[string]bool{}
+	if initialCursor := query.Get("after_id"); initialCursor != "" {
+		seenCursors[initialCursor] = true
+	}
+	seenModels := map[string]bool{}
+	models := []string{}
+	totalItems := 0
+	for page := 0; page < 100; page++ {
+		u.RawQuery = query.Encode()
+		req, err := makeAnthropicRequest(ctx, u.String(), key, headers, vars, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Method = http.MethodGet
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "application/json")
+		}
+		value, err := modelCatalogValue(client, req)
+		if err != nil {
+			return nil, err
+		}
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, invalidModelCatalog()
+		}
+		hasMore := false
+		if flag, present := object["has_more"]; present {
+			hasMore, ok = flag.(bool)
+			if !ok {
+				return nil, errors.New("模型列表分页格式不匹配，请手动填写模型名称")
+			}
+		}
+		items, ok := object["data"].([]any)
+		if !ok {
+			return nil, invalidModelCatalog()
+		}
+		totalItems += len(items)
+		if totalItems > 10000 {
+			return nil, errors.New("服务返回的模型数量过多")
+		}
+		if len(items) == 0 && len(models) > 0 && !hasMore {
+			sort.Strings(models)
+			return models, nil
+		}
+		pageModels, err := modelIDs(value)
+		if err != nil {
+			return nil, err
+		}
+		for _, model := range pageModels {
+			if !seenModels[model] {
+				seenModels[model] = true
+				models = append(models, model)
+			}
+		}
+		if !hasMore {
+			sort.Strings(models)
+			return models, nil
+		}
+		cursor, ok := object["last_id"].(string)
+		if !ok || strings.TrimSpace(cursor) == "" || len(cursor) > 4096 || strings.IndexFunc(cursor, unicode.IsControl) >= 0 || seenCursors[cursor] {
+			return nil, errors.New("模型列表返回了无效或重复的分页游标，请手动填写模型名称")
+		}
+		seenCursors[cursor] = true
+		query.Del("before_id")
+		query.Set("after_id", cursor)
+	}
+	return nil, errors.New("模型列表分页过多，请手动填写模型名称")
+}
+
+func invalidModelCatalog() error {
+	return errors.New("模型列表格式不匹配：需要包含 data 数组及每项的 id，请确认服务支持 /models 接口")
 }
 
 func modelsEndpoint(base string) string {
@@ -112,7 +201,7 @@ func modelsEndpoint(base string) string {
 }
 
 func modelIDs(value any) ([]string, error) {
-	invalid := errors.New("模型列表格式不匹配：需要包含 data 数组及每项的 id，请确认服务支持 OpenAI /models 接口")
+	invalid := invalidModelCatalog()
 	object, ok := value.(map[string]any)
 	if !ok {
 		return nil, invalid
