@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.10"
+const version = "0.3.11"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
 const trayMessage = 0x8002
