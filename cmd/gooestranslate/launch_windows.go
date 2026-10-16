@@ -140,6 +140,25 @@ type startupTransaction interface {
 	Rollback() error
 }
 
+func prepareConfigurationStartup(before, enabled bool, prepare func() (*scheduledStartupChange, error)) (startupTransaction, error) {
+	if !before && !enabled {
+		return nil, nil
+	}
+	change, err := prepare()
+	if err != nil {
+		// Preserve unchanged startup when Windows cannot read it; other settings can still save.
+		if before == enabled {
+			return nil, nil
+		}
+		return nil, err
+	}
+	// An enabled save also refreshes a moved executable or migrates a legacy Run entry.
+	if change.NeedsApply(enabled) {
+		return change, nil
+	}
+	return nil, nil
+}
+
 func persistConfigurationWithStartup(old, next engine.Config, startup startupTransaction, replace func(engine.Hotkeys) []string, save func(engine.Config) error) error {
 	if startup != nil {
 		if err := startup.Apply(next.StartAtLogin); err != nil {

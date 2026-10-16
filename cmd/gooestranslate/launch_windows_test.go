@@ -154,3 +154,75 @@ func TestExportedShellIconLoadsWithWindowsDecoder(t *testing.T) {
 		t.Fatal("writing an icon to a missing folder silently succeeded")
 	}
 }
+
+func TestConfigurationStartupReadFailureOnlyBlocksExplicitChanges(t *testing.T) {
+	denied := errors.New("TEST startup read denied")
+	for _, fixture := range []struct {
+		name                     string
+		before, enabled, wantErr bool
+	}{
+		{"unchanged enabled", true, true, false},
+		{"unchanged disabled", false, false, false},
+		{"explicit enable", false, true, true},
+		{"explicit disable", true, false, true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			calls := 0
+			startup, err := prepareConfigurationStartup(fixture.before, fixture.enabled, func() (*scheduledStartupChange, error) {
+				calls++
+				return nil, denied
+			})
+			if (err != nil) != fixture.wantErr || (err != nil && !errors.Is(err, denied)) || startup != nil {
+				t.Fatalf("startup=%v err=%v; want error=%v", startup, err, fixture.wantErr)
+			}
+			if (calls != 0) != (fixture.before || fixture.enabled) {
+				t.Fatal("unchanged disabled startup should not need Windows access")
+			}
+			if !fixture.wantErr {
+				old := engine.DefaultConfig()
+				old.StartAtLogin = fixture.before
+				next := cloneConfig(old)
+				next.Theme = "light"
+				saved := false
+				if err := persistConfigurationWithStartup(old, next, startup, func(engine.Hotkeys) []string { return nil }, func(got engine.Config) error {
+					saved = got.Theme == "light" && got.StartAtLogin == fixture.before
+					return nil
+				}); err != nil || !saved {
+					t.Fatalf("unrelated settings were not saved with startup preserved: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfigurationStartupStillPreparesMigrationAndPathRefresh(t *testing.T) {
+	exe := startupTestExecutable(t)
+	text, err := startupTaskXML(exe, "S-1-5-21-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		name       string
+		task       startupTaskValue
+		legacy     startupValue
+		wantChange bool
+	}{
+		{"legacy migration", startupTaskValue{}, startupStringValue(`"C:\old.exe" --autostart`), true},
+		{"moved executable", startupTaskValue{true, strings.Replace(text, "<Command>", "<Command>C:\\old\\", 1)}, startupValue{}, true},
+		{"current task", startupTaskValue{true, text}, startupValue{}, false},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			tasks := &fakeStartupTaskStore{value: fixture.task}
+			legacy := &fakeStartupStore{value: fixture.legacy}
+			startup, err := prepareConfigurationStartup(true, true, func() (*scheduledStartupChange, error) {
+				return prepareScheduledStartupChange(exe, "S-1-5-21-1001", tasks, legacy)
+			})
+			if err != nil || (startup != nil) != fixture.wantChange {
+				t.Fatalf("startup=%v err=%v; want change=%v", startup, err, fixture.wantChange)
+			}
+			if tasks.writes != 0 || tasks.deletes != 0 || legacy.writes != 0 || legacy.deletes != 0 {
+				t.Fatal("preparing a save changed Windows startup state")
+			}
+		})
+	}
+}

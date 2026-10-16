@@ -24,7 +24,7 @@ import (
 	"unsafe"
 )
 
-const version = "0.3.14"
+const version = "0.3.15"
 const settingsWindowTitle = "鹅译 · 设置"
 const child = 0x40000000 | 0x10000000
 const taskMessage = 0x8001
@@ -123,8 +123,17 @@ func main() {
 	}
 }
 
-func run() int {
+func run() (exitCode int) {
 	runtime.LockOSThread()
+	recordStartup := newStartupRecorder(os.Args, configFile())
+	recordStartup("started")
+	defer func() {
+		if failure := recover(); failure != nil {
+			recordStartup("panic")
+			panic(failure)
+		}
+		recordStartup(fmt.Sprintf("exit-%d", exitCode))
+	}()
 	if len(os.Args) == 3 && os.Args[1] == "--write-icon" {
 		if err := writeApplicationIcon(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -152,6 +161,7 @@ func run() int {
 		}
 		defer call(kernel, "CloseHandle", handle)
 		if !primary {
+			recordStartup("existing-instance")
 			if err := activateApplicationInstance(os.Args); err != nil {
 				fatal(err)
 				return 1
@@ -180,11 +190,13 @@ func run() int {
 	if e != nil {
 		app.loadError = "设置读取失败，请检查文件；如密钥无法解密，请重新填写或清除密钥。"
 	}
+	recordStartup("configuration-loaded")
 	app.speech = NewSpeechService()
 	defer app.speech.Close()
 	app.remoteSpeech = NewRemoteSpeechService()
 	defer app.remoteSpeech.Close()
 	app.voices, _ = app.speech.Voices()
+	recordStartup("speech-ready")
 	app.icon = createAppIcon()
 	if app.icon != 0 {
 		defer call(user, "DestroyIcon", app.icon)
@@ -204,6 +216,7 @@ func run() int {
 		app.quit()
 		return 1
 	}
+	recordStartup("windows-ready")
 	app.capture = NewCaptureController(app.settings.hwnd, func(img *image.RGBA, mode string) { app.receiveImage(img, mode) }, func() {
 		if app.captureResultWasVisible {
 			app.showResult()
@@ -232,6 +245,7 @@ func run() int {
 		}
 		app.hotkeyErrors = app.registerKeys(effectiveHotkeys(cfg))
 		app.tray = app.trayIcon(0)
+		recordStartup(fmt.Sprintf("ready-tray-%t-hotkeys-%d-errors-%d", app.tray, len(app.keys), len(app.hotkeyErrors)))
 	}
 	if uiTest {
 		go app.runUIProbe()

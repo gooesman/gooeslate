@@ -310,17 +310,17 @@ func (a *appState) applyConfiguration(cfg engine.Config, keyChanged, fullImport 
 		if enabled, err := startupStatus(); err == nil {
 			cfg.StartAtLogin = enabled
 		}
-	} else if cfg.StartAtLogin != old.StartAtLogin {
-		executable, err := os.Executable()
-		if err != nil {
-			return apiResult{}, fmt.Errorf("无法确定程序位置，开机自启未更改")
-		}
-		change, err := prepareStartupChange(executable)
+	} else {
+		var err error
+		startup, err = prepareConfigurationStartup(old.StartAtLogin, cfg.StartAtLogin, func() (*scheduledStartupChange, error) {
+			executable, err := os.Executable()
+			if err != nil {
+				return nil, fmt.Errorf("无法确定程序位置，开机自启未更改")
+			}
+			return prepareStartupChange(executable)
+		})
 		if err != nil {
 			return apiResult{}, err
-		}
-		if change.CurrentEnabled() != cfg.StartAtLogin {
-			startup = change
 		}
 	}
 	if err := persistConfigurationWithStartup(old, cfg, startup, a.replaceKeys, saveConfig); err != nil {

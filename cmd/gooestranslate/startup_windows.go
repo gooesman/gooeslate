@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows/registry"
@@ -122,11 +121,11 @@ func startupValueEnabled(value startupValue) (bool, error) {
 }
 
 func startupStatus() (bool, error) {
-	value, err := (windowsStartupStore{}).Read()
+	sid, name, err := startupTaskIdentity()
 	if err != nil {
 		return false, err
 	}
-	return startupValueEnabled(value)
+	return startupStatusWithStores(windowsStartupTaskStore{name: name, sid: sid}, windowsStartupStore{})
 }
 
 func startupCommand(executable string) (string, error) {
@@ -143,70 +142,10 @@ func startupCommand(executable string) (string, error) {
 	return `"` + filepath.Clean(executable) + `" --autostart`, nil
 }
 
-func startupStringValue(command string) startupValue {
-	words := append(utf16.Encode([]rune(command)), 0)
-	data := make([]byte, len(words)*2)
-	for i, word := range words {
-		binary.LittleEndian.PutUint16(data[i*2:], word)
-	}
-	return startupValue{exists: true, typeID: registry.SZ, data: data}
-}
-
-type startupChange struct {
-	store   startupStore
-	before  startupValue
-	command string
-	applied bool
-}
-
-func prepareStartupChange(executable string) (*startupChange, error) {
-	return prepareStartupChangeWithStore(executable, windowsStartupStore{})
-}
-
-func prepareStartupChangeWithStore(executable string, store startupStore) (*startupChange, error) {
-	command, err := startupCommand(executable)
+func prepareStartupChange(executable string) (*scheduledStartupChange, error) {
+	sid, name, err := startupTaskIdentity()
 	if err != nil {
 		return nil, err
 	}
-	before, err := store.Read()
-	if err != nil {
-		return nil, err
-	}
-	before.data = append([]byte(nil), before.data...)
-	return &startupChange{store: store, before: before, command: command}, nil
-}
-
-func (c *startupChange) CurrentEnabled() bool {
-	enabled, _ := startupValueEnabled(c.before)
-	return enabled
-}
-
-func (c *startupChange) Apply(enabled bool) error {
-	var err error
-	if enabled {
-		err = c.store.Write(startupStringValue(c.command))
-	} else {
-		err = c.store.Delete()
-	}
-	if err != nil {
-		return err
-	}
-	c.applied = true
-	return nil
-}
-
-func (c *startupChange) Rollback() error {
-	if !c.applied {
-		return nil
-	}
-	var err error
-	if c.before.exists {
-		err = c.store.Write(c.before)
-	} else {
-		err = c.store.Delete()
-	}
-	if err == nil {
-		c.applied = false
-	}
-	return err
+	return prepareScheduledStartupChange(executable, sid, windowsStartupTaskStore{name: name, sid: sid}, windowsStartupStore{})
 }
